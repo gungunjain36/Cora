@@ -2,9 +2,10 @@ from fastapi import APIRouter, HTTPException, Depends, Body
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 import os
+import traceback
 
-from  utils.useLLM import UseLLM
-from  agents.communication_agent import CommunicationAgent
+from utils.useLLM import UseLLM
+from agents.communication_agent import CommunicationAgent
 
 # Create router
 router = APIRouter(
@@ -15,18 +16,24 @@ router = APIRouter(
 
 # Initialize the LLM utility
 try:
+    print("Initializing LLM utility...")
+    api_key = os.environ.get("OPENAI_API_KEY")
+    print(f"API key available: {bool(api_key)}")
+    
     llm_utility = UseLLM(
         model_name="gpt-4o",
         temperature=0.7,
-        api_key=os.environ.get("OPENAI_API_KEY")
+        api_key=api_key
     )
+    print("LLM utility initialized successfully")
     
     # Initialize the communication agent
+    print("Initializing communication agent...")
     communication_agent = CommunicationAgent(llm_utility)
-    print("Communication agent initialized")
-    print(communication_agent)
+    print("Communication agent initialized successfully")
 except Exception as e:
     print(f"Error initializing agents: {str(e)}")
+    print(traceback.format_exc())
     communication_agent = None
 
 # Request and response models
