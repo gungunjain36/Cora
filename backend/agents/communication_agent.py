@@ -576,13 +576,14 @@ class CommunicationAgent:
         # Compile the graph with optimized settings
         return builder.compile()
     
-    async def invoke_async(self, message: str, user_id: str = "default_user") -> Dict[str, Any]:
+    async def invoke_async(self, message: str, user_id: str = "default_user", user_details: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Asynchronously invoke the communication agent with a user message.
         
         Args:
             message: The user message.
             user_id: The user ID.
+            user_details: Optional user details from the frontend onboarding form.
             
         Returns:
             The response from the agent.
@@ -598,6 +599,58 @@ class CommunicationAgent:
                 "conversation_stage": "greeting",
                 "step_count": 0  # Initialize step count
             }
+            
+            # If user details are provided from the frontend, incorporate them
+            if user_details:
+                print(f"Incorporating user details from frontend for user {user_id}")
+                user_info = self.conversation_history[user_id]["user_info"]
+                
+                # Map frontend fields to our internal user_info structure
+                if "age" in user_details:
+                    try:
+                        user_info["age"] = int(user_details["age"])
+                    except (ValueError, TypeError):
+                        user_info["age"] = user_details["age"]
+                
+                if "gender" in user_details:
+                    user_info["gender"] = user_details["gender"]
+                
+                if "smoker" in user_details:
+                    user_info["smoking"] = "yes" if user_details["smoker"] == "Yes" else "no"
+                
+                if "preExistingConditions" in user_details or "familyHistory" in user_details:
+                    health_conditions = []
+                    if user_details.get("preExistingConditions") == "Yes":
+                        health_conditions.append("Has pre-existing conditions")
+                    if user_details.get("familyHistory") == "Yes":
+                        health_conditions.append("Has family history of serious illnesses")
+                    
+                    if health_conditions:
+                        user_info["health"] = ", ".join(health_conditions)
+                    else:
+                        user_info["health"] = "No significant health issues reported"
+                
+                # Additional information that might be useful for personalization
+                if "name" in user_details:
+                    user_info["name"] = user_details["name"]
+                
+                if "income" in user_details:
+                    user_info["income"] = user_details["income"]
+                
+                if "occupation" in user_details:
+                    user_info["occupation"] = user_details["occupation"]
+                
+                if "email" in user_details:
+                    user_info["email"] = user_details["email"]
+                
+                if "phone" in user_details:
+                    user_info["phone"] = user_details["phone"]
+                
+                # Log the collected information
+                print(f"User info collected from frontend: {user_info}")
+        
+        # Check if this is a general question that needs a quick response
+        is_general_question = self._is_general_question(message)
         
         # Add user message to history
         user_message = HumanMessage(content=message)
@@ -605,6 +658,24 @@ class CommunicationAgent:
         
         # Debug: Print current conversation stage
         print(f"Before async graph execution - User: {user_id}, Stage: {self.conversation_history[user_id]['conversation_stage']}")
+        
+        # For general questions, provide a quick response without running the full graph
+        if is_general_question and self.conversation_history[user_id]["step_count"] <= 1:
+            try:
+                # Generate a quick response directly
+                quick_response = await self._generate_quick_response(message, user_id)
+                
+                # Update conversation history
+                self.conversation_history[user_id]["messages"].append(quick_response)
+                self.conversation_history[user_id]["step_count"] += 1
+                
+                return {
+                    "response": quick_response.content,
+                    "conversation_stage": "collecting_info"
+                }
+            except Exception as e:
+                print(f"Error generating quick response: {str(e)}")
+                # Continue with normal flow if quick response fails
         
         try:
             # Run the graph with increased recursion limit and optimized settings
@@ -638,10 +709,14 @@ class CommunicationAgent:
                             HumanMessage(content=f"""
                             The user has just started a conversation with the message: "{message}"
                             
-                            Greet them warmly and explain that you'll help them find the right life insurance policy.
-                            Ask for their basic information like age, gender, and whether they smoke.
+                            User details we already have:
+                            {self.conversation_history[user_id]["user_info"]}
+                            
+                            Greet them warmly by name if available, and explain that you'll help them find the right life insurance policy.
+                            If we're missing any essential information (age, gender, smoking status, health), ask for it.
+                            If we have all the essential information, ask about their insurance needs and preferences.
                             Be conversational and friendly, but get straight to the point.
-                            DO NOT provide any policy recommendations yet - we need to collect their information first.
+                            DO NOT provide any policy recommendations yet unless we have all required information.
                             """)
                         ])
                         
@@ -679,10 +754,14 @@ class CommunicationAgent:
                         HumanMessage(content=f"""
                         The user has just started a conversation with the message: "{message}"
                         
-                        Greet them warmly and explain that you'll help them find the right life insurance policy.
-                        Ask for their basic information like age, gender, and whether they smoke.
+                        User details we already have:
+                        {self.conversation_history[user_id]["user_info"]}
+                        
+                        Greet them warmly by name if available, and explain that you'll help them find the right life insurance policy.
+                        If we're missing any essential information (age, gender, smoking status, health), ask for it.
+                        If we have all the essential information, ask about their insurance needs and preferences.
                         Be conversational and friendly, but get straight to the point.
-                        DO NOT provide any policy recommendations yet - we need to collect their information first.
+                        DO NOT provide any policy recommendations yet unless we have all required information.
                         """)
                     ])
                     
@@ -704,13 +783,14 @@ class CommunicationAgent:
                 "conversation_stage": "collecting_info"
             }
     
-    def invoke(self, message: str, user_id: str = "default_user") -> Dict[str, Any]:
+    def invoke(self, message: str, user_id: str = "default_user", user_details: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Invoke the communication agent with a user message.
         
         Args:
             message: The user message.
             user_id: The user ID.
+            user_details: Optional user details from the frontend onboarding form.
             
         Returns:
             The response from the agent.
@@ -726,6 +806,58 @@ class CommunicationAgent:
                 "conversation_stage": "greeting",
                 "step_count": 0  # Initialize step count
             }
+            
+            # If user details are provided from the frontend, incorporate them
+            if user_details:
+                print(f"Incorporating user details from frontend for user {user_id}")
+                user_info = self.conversation_history[user_id]["user_info"]
+                
+                # Map frontend fields to our internal user_info structure
+                if "age" in user_details:
+                    try:
+                        user_info["age"] = int(user_details["age"])
+                    except (ValueError, TypeError):
+                        user_info["age"] = user_details["age"]
+                
+                if "gender" in user_details:
+                    user_info["gender"] = user_details["gender"]
+                
+                if "smoker" in user_details:
+                    user_info["smoking"] = "yes" if user_details["smoker"] == "Yes" else "no"
+                
+                if "preExistingConditions" in user_details or "familyHistory" in user_details:
+                    health_conditions = []
+                    if user_details.get("preExistingConditions") == "Yes":
+                        health_conditions.append("Has pre-existing conditions")
+                    if user_details.get("familyHistory") == "Yes":
+                        health_conditions.append("Has family history of serious illnesses")
+                    
+                    if health_conditions:
+                        user_info["health"] = ", ".join(health_conditions)
+                    else:
+                        user_info["health"] = "No significant health issues reported"
+                
+                # Additional information that might be useful for personalization
+                if "name" in user_details:
+                    user_info["name"] = user_details["name"]
+                
+                if "income" in user_details:
+                    user_info["income"] = user_details["income"]
+                
+                if "occupation" in user_details:
+                    user_info["occupation"] = user_details["occupation"]
+                
+                if "email" in user_details:
+                    user_info["email"] = user_details["email"]
+                
+                if "phone" in user_details:
+                    user_info["phone"] = user_details["phone"]
+                
+                # Log the collected information
+                print(f"User info collected from frontend: {user_info}")
+        
+        # Check if this is a general question that needs a quick response
+        is_general_question = self._is_general_question(message)
         
         # Add user message to history
         user_message = HumanMessage(content=message)
@@ -733,6 +865,24 @@ class CommunicationAgent:
         
         # Debug: Print current conversation stage
         print(f"Before graph execution - User: {user_id}, Stage: {self.conversation_history[user_id]['conversation_stage']}")
+        
+        # For general questions, provide a quick response without running the full graph
+        if is_general_question and self.conversation_history[user_id]["step_count"] <= 1:
+            try:
+                # Generate a quick response directly
+                quick_response = self._generate_quick_response_sync(message, user_id)
+                
+                # Update conversation history
+                self.conversation_history[user_id]["messages"].append(quick_response)
+                self.conversation_history[user_id]["step_count"] += 1
+                
+                return {
+                    "response": quick_response.content,
+                    "conversation_stage": "collecting_info"
+                }
+            except Exception as e:
+                print(f"Error generating quick response: {str(e)}")
+                # Continue with normal flow if quick response fails
         
         try:
             # Run the graph with increased recursion limit and optimized settings
@@ -762,10 +912,14 @@ class CommunicationAgent:
                             HumanMessage(content=f"""
                             The user has just started a conversation with the message: "{message}"
                             
-                            Greet them warmly and explain that you'll help them find the right life insurance policy.
-                            Ask for their basic information like age, gender, and whether they smoke.
+                            User details we already have:
+                            {self.conversation_history[user_id]["user_info"]}
+                            
+                            Greet them warmly by name if available, and explain that you'll help them find the right life insurance policy.
+                            If we're missing any essential information (age, gender, smoking status, health), ask for it.
+                            If we have all the essential information, ask about their insurance needs and preferences.
                             Be conversational and friendly, but get straight to the point.
-                            DO NOT provide any policy recommendations yet - we need to collect their information first.
+                            DO NOT provide any policy recommendations yet unless we have all required information.
                             """)
                         ])
                         
@@ -803,10 +957,14 @@ class CommunicationAgent:
                         HumanMessage(content=f"""
                         The user has just started a conversation with the message: "{message}"
                         
-                        Greet them warmly and explain that you'll help them find the right life insurance policy.
-                        Ask for their basic information like age, gender, and whether they smoke.
+                        User details we already have:
+                        {self.conversation_history[user_id]["user_info"]}
+                        
+                        Greet them warmly by name if available, and explain that you'll help them find the right life insurance policy.
+                        If we're missing any essential information (age, gender, smoking status, health), ask for it.
+                        If we have all the essential information, ask about their insurance needs and preferences.
                         Be conversational and friendly, but get straight to the point.
-                        DO NOT provide any policy recommendations yet - we need to collect their information first.
+                        DO NOT provide any policy recommendations yet unless we have all required information.
                         """)
                     ])
                     
@@ -827,6 +985,114 @@ class CommunicationAgent:
                 "response": "Hello! I'm your friendly insurance advisor. I can help you find the right life insurance policy for your needs. To get started, could you please tell me a bit about yourself? I'd like to know your age, gender, and whether you smoke. This information will help me provide personalized recommendations for you.",
                 "conversation_stage": "collecting_info"
             }
+    
+    def _is_general_question(self, message: str) -> bool:
+        """
+        Determine if a message is a general question that should get a quick response.
+        
+        Args:
+            message: The user message.
+            
+        Returns:
+            True if the message is a general question, False otherwise.
+        """
+        # Convert to lowercase for case-insensitive matching
+        message_lower = message.lower()
+        
+        # List of common greetings and general questions
+        general_patterns = [
+            "hi", "hello", "hey", "greetings", "good morning", "good afternoon", "good evening",
+            "what can you do", "how can you help", "what do you do", "who are you",
+            "what is this", "how does this work", "tell me about", "explain",
+            "thanks", "thank you", "appreciate it"
+        ]
+        
+        # Check if the message contains any of the general patterns
+        for pattern in general_patterns:
+            if pattern in message_lower:
+                return True
+        
+        # Check if the message is very short (likely a greeting)
+        if len(message_lower.split()) <= 5:
+            return True
+        
+        return False
+    
+    async def _generate_quick_response(self, message: str, user_id: str) -> AIMessage:
+        """
+        Generate a quick response for general questions without running the full graph.
+        
+        Args:
+            message: The user message.
+            user_id: The user ID.
+            
+        Returns:
+            An AI message with the quick response.
+        """
+        user_info = self.conversation_history[user_id]["user_info"]
+        user_name = user_info.get("name", "")
+        
+        # Create a message for the LLM
+        messages = [
+            self.system_message,
+            HumanMessage(content=f"""
+            The user has sent a general message: "{message}"
+            
+            User details we already have:
+            {user_info}
+            
+            Provide a quick, friendly response that:
+            1. Greets them by name if available
+            2. Briefly explains that you're an insurance advisor who can help find the right life insurance policy
+            3. Mentions 2-3 specific ways you can help (e.g., comparing policies, explaining terms, calculating premiums)
+            4. If we don't have their basic information yet, ask for it
+            5. If we already have their basic information, ask about their insurance needs
+            
+            Keep your response concise, friendly, and helpful. Don't provide specific policy recommendations yet.
+            """)
+        ]
+        
+        # Get response from LLM with a shorter timeout
+        response = await self.llm_utility.ainvoke(messages, temperature=0.7, max_tokens=300)
+        return response
+    
+    def _generate_quick_response_sync(self, message: str, user_id: str) -> AIMessage:
+        """
+        Generate a quick response for general questions without running the full graph (synchronous version).
+        
+        Args:
+            message: The user message.
+            user_id: The user ID.
+            
+        Returns:
+            An AI message with the quick response.
+        """
+        user_info = self.conversation_history[user_id]["user_info"]
+        user_name = user_info.get("name", "")
+        
+        # Create a message for the LLM
+        messages = [
+            self.system_message,
+            HumanMessage(content=f"""
+            The user has sent a general message: "{message}"
+            
+            User details we already have:
+            {user_info}
+            
+            Provide a quick, friendly response that:
+            1. Greets them by name if available
+            2. Briefly explains that you're an insurance advisor who can help find the right life insurance policy
+            3. Mentions 2-3 specific ways you can help (e.g., comparing policies, explaining terms, calculating premiums)
+            4. If we don't have their basic information yet, ask for it
+            5. If we already have their basic information, ask about their insurance needs
+            
+            Keep your response concise, friendly, and helpful. Don't provide specific policy recommendations yet.
+            """)
+        ]
+        
+        # Get response from LLM with a shorter timeout
+        response = self.llm_utility.invoke(messages, temperature=0.7, max_tokens=300)
+        return response
     
     def get_conversation_history(self, user_id: str) -> List[Dict[str, Any]]:
         """

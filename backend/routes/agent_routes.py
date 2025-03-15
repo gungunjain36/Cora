@@ -33,6 +33,7 @@ except Exception as e:
 class MessageRequest(BaseModel):
     message: str
     user_id: str = "default_user"
+    user_details: Optional[Dict[str, Any]] = None
 
 class MessageResponse(BaseModel):
     response: str
@@ -46,12 +47,19 @@ class ConversationHistoryResponse(BaseModel):
 async def chat(request: MessageRequest):
     """
     Chat with the communication agent.
+    
+    The request can include user details from the frontend onboarding form.
     """
     if communication_agent is None:
         raise HTTPException(status_code=500, detail="Agents not initialized properly")
     
     try:
-        response = communication_agent.invoke(request.message, request.user_id)
+        # Use the async version for better performance
+        response = await communication_agent.invoke_async(
+            request.message, 
+            request.user_id,
+            request.user_details
+        )
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")

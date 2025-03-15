@@ -113,56 +113,70 @@ class UseLLM:
         kwargs_str = "||".join([f"{k}:{v}" for k, v in sorted(kwargs.items())])
         return f"{message_str}|{kwargs_str}"
     
-    def invoke(self, messages: List[BaseMessage], **kwargs):
+    def invoke(self, messages: List[BaseMessage], temperature: Optional[float] = None, max_tokens: Optional[int] = None, **kwargs):
         """
         Invoke the language model with the given messages.
         
         Args:
             messages: A list of messages to send to the language model.
+            temperature: Optional temperature override for this specific call.
+            max_tokens: Optional max tokens override for this specific call.
             **kwargs: Additional arguments to pass to the language model.
             
         Returns:
             The response from the language model.
         """
+        # Apply overrides for this specific call
+        call_kwargs = kwargs.copy()
+        if temperature is not None:
+            call_kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            call_kwargs["max_tokens"] = max_tokens
+        
         # Check cache first
-        cache_key = self._generate_cache_key(messages, **kwargs)
+        cache_key = self._generate_cache_key(messages, **call_kwargs)
         cached_response = self.response_cache.get(cache_key)
         if cached_response:
             return cached_response
         
         # If not in cache, invoke the model
-        response = self.llm.invoke(messages, **kwargs)
+        response = self.llm.invoke(messages, **call_kwargs)
         
         # Cache the response
         self.response_cache.put(cache_key, response)
         
         return response
     
-    async def ainvoke(self, messages: List[BaseMessage], **kwargs):
+    async def ainvoke(self, messages: List[BaseMessage], temperature: Optional[float] = None, max_tokens: Optional[int] = None, **kwargs):
         """
         Asynchronously invoke the language model with the given messages.
         
         Args:
             messages: A list of messages to send to the language model.
+            temperature: Optional temperature override for this specific call.
+            max_tokens: Optional max tokens override for this specific call.
             **kwargs: Additional arguments to pass to the language model.
             
         Returns:
             The response from the language model.
         """
+        # Apply overrides for this specific call
+        call_kwargs = kwargs.copy()
+        if temperature is not None:
+            call_kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            call_kwargs["max_tokens"] = max_tokens
+            
         # Check cache first
-        cache_key = self._generate_cache_key(messages, **kwargs)
+        cache_key = self._generate_cache_key(messages, **call_kwargs)
         cached_response = self.response_cache.get(cache_key)
         if cached_response:
             return cached_response
         
-        # Use semaphore to limit concurrent API calls
+        # Acquire semaphore to limit concurrent API calls
         async with self.semaphore:
             # If not in cache, invoke the model asynchronously
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None, 
-                functools.partial(self.llm.invoke, messages, **kwargs)
-            )
+            response = await self.llm.ainvoke(messages, **call_kwargs)
             
             # Cache the response
             self.response_cache.put(cache_key, response)
