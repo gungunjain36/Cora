@@ -16,3 +16,7 @@ typing_extensions==4.12.2
 uvicorn==0.34.0
 watchfiles==1.0.4
 websockets==15.0.1
+langchain==0.1.12
+langchain-openai==0.1.5
+langgraph==0.0.25
+openai==1.14.0
