@@ -10,6 +10,10 @@ import App from "@/App.tsx";
 import { Toaster } from "@/components/ui/toaster.tsx";
 import { WalletProvider } from "@/components/WalletProvider.tsx";
 import { WrongNetworkAlert } from "@/components/WrongNetworkAlert";
+import { loadFonts } from "@/lib/fonts";
+
+// Load custom fonts
+loadFonts();
 
 const queryClient = new QueryClient();
 

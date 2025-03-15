@@ -1,0 +1,222 @@
+export default function AgentKitCard() {
+  return (
+    <div className="rounded-3xl transform-gpu transition-all duration-300 hover:scale-105 hover:bg-morange hover:shadow-[0px_16px_40px_4px_rgba(46,139,87,0.2)] p-[1px] xl:min-w-[663px] 2xl:min-w-[854px] bg-gradient-to-b h-[240px] md:h-[412px] overflow-hidden from-[#606064] via-[#60606442] to-[#9B9DC9BD] w-full">
+      <div className="black_card_gradient_with_colors h-full w-full relative rounded-[23px] overflow-hidden">
+        <div className="absolute z-10 flex flex-col w-full h-full p-[30px]">
+          <h3 className="mb-4 gradient_text_2 font-neue leading-none text-left text-[40px] font-extrabold">Move Agent Kit</h3>
+          <span className="text-balance mb-8 max-w-[298px]">
+            A toolkit for your agents to interact with Aptos/Move blockchain.
+          </span>
+          <a href="/move-agent-kit" className="w-fit">
+            <button
+              type="button"
+              className="group relative z-0 flex cursor-pointer items-center justify-center overflow-hidden whitespace-nowrap border border-white/10 px-6 py-3 text-white [background:var(--bg)] [border-radius:var(--radius)] dark:text-black transform-gpu transition-transform duration-300 ease-in-out active:translate-y-px shadow-2xl w-[160px]"
+              style={{
+                '--spread': '90deg',
+                '--shimmer-color': '#ffffff',
+                '--radius': '100px',
+                '--speed': '3s',
+                '--cut': '0.05em',
+                '--bg': 'rgba(0, 0, 0, 1)'
+              } as React.CSSProperties}
+            >
+              <div className="-z-30 blur-[2px] absolute inset-0 overflow-visible [container-type:size]">
+                <div className="absolute inset-0 h-[100cqh] animate-shimmer-slide [aspect-ratio:1] [border-radius:0] [mask:none]">
+                  <div className="absolute -inset-full w-auto rotate-0 animate-spin-around [background:conic-gradient(from_calc(270deg-(var(--spread)*0.5)),transparent_0,var(--shimmer-color)_var(--spread),transparent_var(--spread))] [translate:0_0]"></div>
+                </div>
+              </div>
+              <span className="whitespace-pre-wrap text-center text-sm md:text-base font-medium leading-none tracking-tight text-white dark:from-white dark:to-slate-900/10">
+                Explore
+              </span>
+              <div className="insert-0 absolute size-full rounded-2xl px-4 py-1.5 text-sm font-medium shadow-[inset_0_-8px_10px_#ffffff1f] transform-gpu transition-all duration-300 ease-in-out group-hover:shadow-[inset_0_-6px_10px_#ffffff3f] group-active:shadow-[inset_0_-10px_10px_#ffffff3f]"></div>
+              <div className="absolute -z-20 [background:var(--bg)] [border-radius:var(--radius)] [inset:var(--cut)]"></div>
+            </button>
+          </a>
+        </div>
+        <div
+          className="absolute inset-0 opacity-20 z-0"
+          style={{
+            backgroundImage: `url('/assets/kit_card_dots.svg')`,
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+            backgroundRepeat: 'no-repeat',
+          }}
+        />
+        <div className="absolute right-0 bottom-0 z-0 hidden md:block">
+          <img
+            src="/assets/code_card.png"
+            alt="Code Card"
+            className="w-[420px] h-auto object-contain"
+            style={{ marginRight: '-30px', marginBottom: '-30px' }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
+---
+
+
+import Image from 'next/image';
+import Link from 'next/link';
+
+export default function Header() {
+  return (
+    <header className="w-full py-[30px] flex items-center justify-between px-4 md:px-8 lg:px-16 2xl:px-[116px]">
+      <Link href="/">
+        <Image
+          src="/assets/logo.svg"
+          alt="MetaMove Logo"
+          width={120}
+          height={40}
+          priority
+        />
+      </Link>
+      <ul className="flex items-center space-x-8">
+        <li>
+          <a href="https://t.me/metamove_build" target="_blank" rel="noopener noreferrer">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              className="w-6 h-6"
+            >
+              <path
+                fill="none"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="1.5"
+                d="m11.985 15.408l3.242 3.686c1.2 1.365 1.801 2.048 2.43 1.881c.628-.166.844-1.064 1.275-2.861l2.39-9.968c.665-2.768.997-4.151.259-4.834s-2.017-.175-4.575.84L5.14 8.865c-2.046.813-3.069 1.219-3.134 1.917a1 1 0 0 0 0 .214c.063.699 1.084 1.108 3.128 1.927c.925.371 1.388.557 1.72.912q.056.06.108.124c.306.38.436.88.697 1.876l.489 1.867c.253.97.38 1.456.713 1.522s.622-.336 1.201-1.141zm0 0l-.317-.33c-.362-.378-.543-.566-.543-.8s.18-.423.543-.8l3.573-3.724"
+                color="currentColor"
+              ></path>
+            </svg>
+          </a>
+        </li>
+        <li>
+          <a href="https://x.com/metamove_" target="_blank" rel="noopener noreferrer">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              className="w-6 h-6"
+            >
+              <path
+                fill="none"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="1.5"
+                d="m3 21l7.548-7.548M21 3l-7.548 7.548m0 0L8 3H3l7.548 10.452m2.904-2.904L21 21h-5l-5.452-7.548"
+                color="currentColor"
+              ></path>
+            </svg>
+          </a>
+        </li>
+      </ul>
+    </header>
+  );
+}
+
+
+---
+
+import Image from 'next/image';
+
+export default function TracksCard() {
+  return (
+    <a href="/tracks" className="md:max-w-[388px] rounded-3xl transition-all transform-gpu duration-300 hover:scale-105 hover:bg-morange hover:shadow-[0px_16px_40px_4px_rgba(46,139,87,0.2)] h-[412px] p-[1px] bg-gradient-to-b overflow-hidden from-[#606064] via-[#60606442] to-[#9B9DC9BD] w-full">
+      <div className="h-full w-full relative rounded-[23px] overflow-hidden bg-black">
+        <div className="absolute z-10 flex flex-col w-full h-full">
+          <div className="flex flex-col text-center w-full items-center justify-start h-full mt-9">
+            <div className="mb-[60px] flex flex-col items-center">
+              <h3 className="gradient_text text-[40px] font-extrabold">4</h3>
+              <img
+                width="166"
+                height="40"
+                alt="tracks"
+                src="/assets/tracks.svg"
+              />
+            </div>
+            <div className="mb-[38px] flex flex-col items-center">
+              <h3 className="gradient_text_3 text-[40px] font-extrabold">$250,000</h3>
+              <img
+                width="188"
+                height="40"
+                alt="prize pool"
+                src="/assets/prize_pool.svg"
+              />
+            </div>
+            <img
+              alt="trophy"
+              width="98"
+              height="92"
+              className="flex h-full"
+              src="/assets/trophy.svg"
+            />
+          </div>
+        </div>
+        <div
+          className="absolute inset-0 opacity-20 z-0"
+          style={{
+            backgroundImage: `url('/assets/dots_svg.svg')`,
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+            backgroundRepeat: 'no-repeat',
+          }}
+        />
+      </div>
+    </a>
+  );
+}
+
+
+---
+
+import localFont from 'next/font/local';
+
+export const neuePower = localFont({
+  src: [
+    {
+      path: '../../public/fonts/NeuePowerTrial-Regular.ttf',
+      weight: '400',
+      style: 'normal',
+    },
+    {
+      path: '../../public/fonts/NeuePowerTrial-Heavy.ttf',
+      weight: '800',
+      style: 'normal',
+    },
+  ],
+  variable: '--font-neue-power',
+});
+
+export const baiJamjuree = localFont({
+  src: [
+    {
+      path: '../../public/fonts/bai-jamjuree-regular.woff2',
+      weight: '400',
+      style: 'normal',
+    },
+    {
+      path: '../../public/fonts/bai-jamjuree-500.woff2',
+      weight: '500',
+      style: 'normal',
+    },
+    {
+      path: '../../public/fonts/bai-jamjuree-600.woff2',
+      weight: '600',
+      style: 'normal',
+    },
+  ],
+  variable: '--font-bai-jamjuree',
+});
+
+
+---
+

@@ -49,11 +49,25 @@ module.exports = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        // Cora custom colors
+        morange: "#2E8B57",
+        cora: {
+          primary: "#3CB371",
+          secondary: "#E0F5EE",
+          dark: "#000000",
+          light: "#FFFFFF",
+          gray: "#606064",
+          "light-green": "#98FB98",
+          gradient: {
+            text: "linear-gradient(104deg, #fff 2.92%, #2E8B57 91.72%)"
+          }
+        },
       },
       borderRadius: {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
+        "3xl": "1.5rem",
       },
       keyframes: {
         "accordion-down": {
@@ -64,14 +78,26 @@ module.exports = {
           from: { height: "var(--radix-accordion-content-height)" },
           to: { height: "0" },
         },
+        "shimmer-slide": {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(100%)" },
+        },
+        "spin-around": {
+          "0%": { transform: "rotate(0deg)" },
+          "100%": { transform: "rotate(360deg)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        "shimmer-slide": "shimmer-slide 3s linear infinite",
+        "spin-around": "spin-around 3s linear infinite",
       },
       fontFamily: {
         sans: ["sans-serif"],
         inter: ["Inter", "sans-serif"],
+        neue: ["var(--font-neue-power)", "sans-serif"],
+        bai: ["var(--font-bai-jamjuree)", "sans-serif"],
       },
       fontSize: {
         12: "0.75rem",
@@ -83,6 +109,7 @@ module.exports = {
         26: "1.625rem",
         30: "1.875rem",
         39: "2.4375rem",
+        40: "2.5rem",
         48: "3rem",
         51: "3.1875rem",
         68: "4.25rem",
@@ -103,6 +130,7 @@ module.exports = {
         62: "3.875rem",
         72: "4.5rem",
         116: "7.25rem",
+        none: "1",
       },
     },
   },
@@ -177,6 +205,75 @@ module.exports = {
           fontSize: "32px",
           lineHeight: "52px",
           fontWeight: theme("fontWeight.bold"),
+        },
+        
+        // Gradient text styles
+        ".gradient_text": {
+          background: "linear-gradient(180deg, #FFFFFF 0%, #9B9DC9 100%)",
+          WebkitBackgroundClip: "text",
+          WebkitTextFillColor: "transparent",
+          backgroundClip: "text",
+          textFillColor: "transparent",
+        },
+        ".gradient_text_2": {
+          background: "linear-gradient(180deg, #FFFFFF 0%, #2E8B57 100%)",
+          WebkitBackgroundClip: "text",
+          WebkitTextFillColor: "transparent",
+          backgroundClip: "text",
+          textFillColor: "transparent",
+        },
+        ".gradient_text_3": {
+          background: "linear-gradient(180deg, #FFFFFF 0%, #606064 100%)",
+          WebkitBackgroundClip: "text",
+          WebkitTextFillColor: "transparent",
+          backgroundClip: "text",
+          textFillColor: "transparent",
+        },
+        
+        // Card gradients
+        ".black_card_gradient": {
+          background: "linear-gradient(180deg, #1A1A1A 0%, #000000 100%)",
+        },
+        ".black_card_gradient_with_colors": {
+          background: "linear-gradient(180deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0.6) 100%)",
+        },
+        
+        // Cora Button
+        ".cora-button": {
+          position: "relative",
+          overflow: "hidden",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          whiteSpace: "nowrap",
+          borderRadius: "9999px", // rounded-full
+          paddingLeft: "2rem", // px-8
+          paddingRight: "2rem", // px-8
+          paddingTop: "1rem", // py-4
+          paddingBottom: "1rem", // py-4
+          transform: "translateZ(0)", // transform-gpu
+          transition: "all 300ms ease-in-out", // transition-all duration-300 ease-in-out
+          "&:active": {
+            transform: "translateY(1px)", // active:translate-y-px
+          },
+          "&:hover": {
+            boxShadow: "0px 8px 30px rgba(60, 179, 113, 0.4)",
+          },
+          "& > span:last-child": {
+            position: "relative",
+            display: "flex",
+            alignItems: "center",
+            whiteSpace: "pre-wrap",
+            textAlign: "center",
+            fontSize: theme("fontSize.lg"),
+            lineHeight: "1",
+            fontWeight: "500",
+            letterSpacing: "-0.025em",
+            color: theme("colors.cora.dark"),
+            "@media (min-width: 768px)": {
+              fontSize: theme("fontSize.xl"),
+            },
+          },
         },
       });
     }),

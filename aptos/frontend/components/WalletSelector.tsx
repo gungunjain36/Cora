@@ -52,8 +52,8 @@ export function WalletSelector() {
 
   return connected ? (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button>{account?.ansName || truncateAddress(account?.address.toStringLong()) || "Unknown"}</Button>
+      <DropdownMenuTrigger className="flex items-center">
+        {account?.ansName || truncateAddress(account?.address.toStringLong()) || "Unknown"}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuItem onSelect={copyAddress} className="gap-2">
@@ -73,8 +73,8 @@ export function WalletSelector() {
     </DropdownMenu>
   ) : (
     <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-      <DialogTrigger asChild>
-        <Button>Connect a Wallet</Button>
+      <DialogTrigger className="flex items-center">
+        Connect Wallet
       </DialogTrigger>
       <ConnectWalletDialog close={closeDialog} />
     </Dialog>

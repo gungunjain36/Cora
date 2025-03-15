@@ -2,7 +2,89 @@
 
 ## Overview
 
-We have often seen life insurance scams in India. We are trying to build a platform that uses blockchain to make life insurance more transparent and secure. We have thought that AI Agents can be used to verify the authenticity of the documents and claims. And post that the claims can be settled onchain. All the premiums will be collected in the escrow account and the claim amount will be transferred to the beneficiary after the verification. The platform will be a web app that will be used by the insurance agents and the customers. Also the policyholders can be rewarded for reporting the scams. 
+We have often seen life insurance scams in India. We are trying to build a platform that uses blockchain to make life insurance more transparent and secure. We have thought that AI Agents can be used to verify the authenticity of the documents and claims. And post that the claims can be settled onchain. All the premiums will be collected in the escrow account and the claim amount will be transferred to the beneficiary after the verification. The platform will be a web app that will be used by the insurance agents and the customers. 
+The workflow will be as follows - 
+
+There will be a central voice agent, we are calling it Cora, our communication agent. She will be the one who will talk to the user and based on the user's response, she will call the appropriate next level agent. SO the user can talk and interact with the platform using voice. THey can tell whatever plans they want to buy, and Cora will call the appropriate next level agent to get the details. 
+
+The next level agents will be - 
+
+1. Policy Recommendation Agent - This agent will be able to recommend the policy based on the users profile and the users needs.
+2. Risk Assessment Agent - This agent will be able to assess the risk associated with the policy.
+3. Premium Calculation Agent - This agent will be able to calculate the premium based on the risk assessment.
+
+Each of these agents will be able to talk to the user and get the details. They will be able to call the next level agent and get the details. They will be able to call the previous level agent and get the details.
+
+Now, once this is done, the user will be able to buy the policy. The policy will be a onchain policy. The policy will be stored onchain and the policy details will be available to the user. The user will be able to see the policy details, the premium details, the claim details, the payout details, etc. The user will be able to download the policy document and the claim document. It will basically be onchain version of the policy document and the claim document. 
+
+Later, the user can comeback and file the claim. The claim will be verified by the verification agent and then the claim amount will be transferred to the beneficiary.
+
+## Blockchain Implementation
+
+We'll use a hybrid approach - storing critical data onchain and non-critical data offchain:
+
+**Onchain Storage:**
+- Policy hashes and identifiers
+- Premium payment records
+- Claim status and payouts
+- Smart contract logic for escrow and settlements
+
+**Offchain Storage:**
+- Detailed user information (PII data)
+- Full policy documents
+- Medical records and verification documents
+- AI agent interaction history
+
+### Smart Contracts
+
+1. **PolicyRegistry Contract**
+   - Manages policy registration and status
+   - Stores minimal policy data (ID, holder address, coverage amount, premium amount)
+   - Maps policies to their offchain document hashes
+
+2. **PremiumEscrow Contract**
+   - Handles premium collection and escrow management
+   - Tracks payment history and policy status
+   - Manages funds allocation
+
+3. **ClaimProcessor Contract**
+   - Processes claim verification results
+   - Executes payouts to beneficiaries
+   - Maintains claim history and status
+
+### Data Structures
+
+**Onchain:**
+- PolicyRecord
+  - id: u64
+  - policyholder_address: address
+  - coverage_amount: u64
+  - premium_amount: u64
+  - active_status: bool
+  - document_hash: vector<u8>
+
+- PremiumPayment
+  - policy_id: u64
+  - amount: u64
+  - timestamp: u64
+  - payment_status: bool
+
+- ClaimRecord
+  - id: u64
+  - policy_id: u64
+  - beneficiary_address: address
+  - claim_amount: u64
+  - claim_status: u8 (enum: Pending, Verified, Rejected, Paid)
+  - verification_hash: vector<u8>
+
+**Offchain (Secure Database):**
+- User profiles and KYC information
+- Detailed policy terms and conditions
+- Medical records and risk assessment data
+- Claim documentation and evidence
+- AI verification logs and audit trails
+
+This approach minimizes onchain storage costs while maintaining the security and transparency benefits of blockchain for the most critical aspects of the insurance process.
 
 ## Tech Stack
 
@@ -11,6 +93,7 @@ We have often seen life insurance scams in India. We are trying to build a platf
 - Blockchain - Aptos
 - Smart Contracts - Move
 - Escrow - Aptos
+- Offchain Storage - IPFS for documents, PostgreSQL for structured data
 
 ## Architecture
 
@@ -28,10 +111,13 @@ The backend is built using FastAPI. It is a REST API that will be used by the fr
 
 The smart contracts are written in Move. They are responsible for the logic of the escrow and the claim settlement.
 
-### AI Agents
+## Multi Agent System - 
 
-The AI agents are built using Langchain and LlamaIndex. They are responsible for the verification of the documents and the claims.
+### Top Level Agent - Communication Agent
 
-### Escrow
+### Next Level Agents - 
 
-The escrow is built using Aptos. It is responsible for the collection of the premiums and the settlement of the claims.
+1. Policy Recommendation Agent (talks to Communication Agent and tells the user about the policy based on the results from the Risk Assessment Agent and the Premium Calculation Agent)
+
+2. Risk Assessment Agent (talks to Policy Recommendation Agent)
+3. Premium Calculation Agent (talks to Policy Recommendation Agent)

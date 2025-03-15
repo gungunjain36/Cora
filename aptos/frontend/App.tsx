@@ -1,39 +1,36 @@
 import { useWallet } from "@aptos-labs/wallet-adapter-react";
-// Internal Components
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Header } from "@/components/Header";
-import { WalletDetails } from "@/components/WalletDetails";
-import { NetworkInfo } from "@/components/NetworkInfo";
-import { AccountInfo } from "@/components/AccountInfo";
-import { TransferAPT } from "@/components/TransferAPT";
-import { MessageBoard } from "@/components/MessageBoard";
+import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
+
+// Components
+import { CoraHeader } from "@/components/CoraHeader";
+import { Hero } from "@/components/Hero";
+import { Onboarding } from "@/components/Onboarding";
+import { Dashboard } from "@/components/Dashboard";
 import { TopBanner } from "@/components/TopBanner";
 
 function App() {
   const { connected } = useWallet();
 
   return (
-    <>
-      <TopBanner />
-      <Header />
-      <div className="flex items-center justify-center flex-col">
-        {connected ? (
-          <Card>
-            <CardContent className="flex flex-col gap-10 pt-6">
-              <WalletDetails />
-              <NetworkInfo />
-              <AccountInfo />
-              <TransferAPT />
-              <MessageBoard />
-            </CardContent>
-          </Card>
-        ) : (
-          <CardHeader>
-            <CardTitle>To get started Connect a wallet</CardTitle>
-          </CardHeader>
-        )}
+    <Router>
+      <div className="min-h-screen bg-black text-white flex flex-col">
+        <CoraHeader />
+        <main className="flex-1">
+          <Routes>
+            <Route path="/" element={<Hero />} />
+            <Route 
+              path="/onboarding" 
+              element={connected ? <Onboarding /> : <Navigate to="/" />} 
+            />
+            <Route 
+              path="/dashboard" 
+              // element={connected ? <Dashboard /> : <Navigate to="/" />} 
+              element={<Dashboard />}
+            />
+          </Routes>
+        </main>
       </div>
-    </>
+    </Router>
   );
 }
 
