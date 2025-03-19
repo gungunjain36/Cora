@@ -21,7 +21,7 @@ try:
     print(f"API key available: {bool(api_key)}")
     
     llm_utility = UseLLM(
-        model_name="gpt-4o",
+        model_name="gpt-4",
         temperature=0.7,
         api_key=api_key
     )
@@ -61,14 +61,22 @@ async def chat(request: MessageRequest):
         raise HTTPException(status_code=500, detail="Agents not initialized properly")
     
     try:
+        print(f"Processing chat request for user {request.user_id}")
+        print(f"User details: {request.user_details}")
+        print(f"Message: {request.message}")
+        
         # Use the async version for better performance
         response = await communication_agent.invoke_async(
             request.message, 
             request.user_id,
             request.user_details
         )
+        
+        print(f"Generated response: {response}")
         return response
     except Exception as e:
+        print(f"Error in chat endpoint: {str(e)}")
+        print(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
 
 @router.get("/history/{user_id}", response_model=ConversationHistoryResponse)
