@@ -17,6 +17,94 @@ from  utils.useLLM import UseLLM
 from  agents.risk_assesment_agent import RiskAssessmentAgent
 from  agents.premium_calculation_agent import PremiumCalculationAgent
 
+# Available policies
+AVAILABLE_POLICIES = [
+    {
+        "name": "Term Life Insurance - 10 Years",
+        "type": "Life",
+        "sub_type": "Term",
+        "policy_term": "10 years",
+        "death_benefit": "$250,000",
+        "maturity_benefit": "None",
+        "premium": "$15/month",
+        "payment_frequency": "Monthly",
+        "additional_details": "For a 30-year-old non-smoker. 30-day grace period. 2-year contestability period."
+    },
+    {
+        "name": "Term Life Insurance - 20 Years",
+        "type": "Life",
+        "sub_type": "Term",
+        "policy_term": "20 years",
+        "death_benefit": "$500,000",
+        "maturity_benefit": "None",
+        "premium": "$25/month",
+        "payment_frequency": "Monthly",
+        "additional_details": "For a 30-year-old non-smoker. 30-day grace period. 2-year contestability period."
+    },
+    {
+        "name": "Whole Life Insurance",
+        "type": "Life",
+        "sub_type": "Whole",
+        "policy_term": "Lifetime",
+        "death_benefit": "$100,000",
+        "maturity_benefit": "Cash value",
+        "premium": "$150/month",
+        "payment_frequency": "Monthly",
+        "additional_details": "For a 30-year-old non-smoker. Builds cash value. 30-day grace period. 2-year contestability period."
+    },
+    {
+        "name": "Universal Life Insurance",
+        "type": "Life",
+        "sub_type": "Universal",
+        "policy_term": "Lifetime",
+        "death_benefit": "$200,000",
+        "maturity_benefit": "Cash value",
+        "premium": "$200/month",
+        "payment_frequency": "Monthly",
+        "additional_details": "For a 30-year-old non-smoker. Flexible premiums and death benefits. Cash value earns interest. 30-day grace period. 2-year contestability period."
+    },
+    {
+        "name": "HMO Health Insurance",
+        "type": "Health",
+        "sub_type": "HMO",
+        "policy_term": "1 year, renewable",
+        "coverage": "Medical expenses up to $20,000/year",
+        "premium": "$150/month",
+        "payment_frequency": "Monthly",
+        "additional_details": "For a 30-year-old. Requires use of network providers. Low copays. 30-day grace period. Waiting period for pre-existing conditions: 12 months."
+    },
+    {
+        "name": "PPO Health Insurance",
+        "type": "Health",
+        "sub_type": "PPO",
+        "policy_term": "1 year, renewable",
+        "coverage": "Medical expenses up to $30,000/year",
+        "premium": "$250/month",
+        "payment_frequency": "Monthly",
+        "additional_details": "For a 30-year-old. More provider choices. Higher copays. 30-day grace period. Waiting period for pre-existing conditions: 6 months."
+    },
+    {
+        "name": "HDHP with HSA",
+        "type": "Health",
+        "sub_type": "HDHP",
+        "policy_term": "1 year, renewable",
+        "coverage": "Medical expenses with $5,000 deductible, up to $50,000/year",
+        "premium": "$100/month",
+        "payment_frequency": "Monthly",
+        "additional_details": "For a 30-year-old. Eligible for HSA. 30-day grace period. No waiting period for pre-existing conditions."
+    },
+    {
+        "name": "Critical Illness Insurance",
+        "type": "Health",
+        "sub_type": "Critical Illness",
+        "policy_term": "10 years",
+        "coverage": "Lump sum payout of $50,000 upon diagnosis of specified critical illnesses",
+        "premium": "$50/month",
+        "payment_frequency": "Monthly",
+        "additional_details": "For a 30-year-old. 30-day grace period. Waiting period: 90 days from policy start."
+    }
+]
+
 class PolicyRecommendationState(TypedDict):
     """State for the policy recommendation agent."""
     messages: Annotated[Sequence[BaseMessage], add_messages]
@@ -44,14 +132,17 @@ class PolicyRecommendationAgent:
         self.risk_agent = risk_agent
         self.premium_agent = premium_agent
         self.system_message = llm_utility.create_system_message(
-            """You are a policy recommendation agent for a life insurance company.
-            Your job is to recommend the appropriate policy to the user based on their risk assessment and premium calculation.
-            You will be provided with the user's information, risk assessment, and premium calculation.
+            """You are a policy recommendation agent for an insurance company.
+            Your job is to recommend the most appropriate policy to the user from a predefined list of available policies.
+            You will be provided with the user's information, risk assessment, premium calculation, and a list of available policies.
             You need to recommend the most suitable policy for the user based on these factors.
             Provide a detailed explanation of why you are recommending this policy.
             """
         )
         self.recommendation_history = {}  # Store recommendation history by user ID
+        
+        # Create a memory saver for checkpointing
+        self.memory_saver = MemorySaver()
         
         # Create the graph
         self.graph = self._create_graph()
@@ -79,19 +170,28 @@ class PolicyRecommendationAgent:
             risk_assessment = state["risk_assessment"]
             premium_calculation = state["premium_calculation"]
             
+            # Format the available policies for the LLM
+            policies_text = ""
+            for i, policy in enumerate(AVAILABLE_POLICIES, 1):
+                policies_text += f"Policy {i}: {policy['name']}\n"
+                for key, value in policy.items():
+                    if key != "name":
+                        policies_text += f"  - {key}: {value}\n"
+                policies_text += "\n"
+            
             # Create a message for the LLM
             messages = [
                 self.system_message,
                 HumanMessage(content=f"""
-                Please recommend a policy for this user:
+                Please recommend a policy for this user from the list of available policies:
                 
                 User Information:
                 - Age: {user_info.get('age', 'Unknown')}
                 - Gender: {user_info.get('gender', 'Unknown')}
-                - Health Conditions: {user_info.get('health_conditions', [])}
+                - Health: {user_info.get('health', 'Unknown')}
                 - Smoking Status: {user_info.get('smoking', 'Unknown')}
-                - Family History: {user_info.get('family_history', [])}
                 - Occupation: {user_info.get('occupation', 'Unknown')}
+                - Income: {user_info.get('income', 'Unknown')}
                 
                 Risk Assessment:
                 - Risk Score: {risk_assessment.get('risk_score', 'Unknown')}
@@ -104,28 +204,39 @@ class PolicyRecommendationAgent:
                 - Breakdown: {premium_calculation.get('breakdown', {})}
                 - Explanation: {premium_calculation.get('explanation', 'Unknown')}
                 
-                Recommend the most suitable policy for this user and provide a detailed explanation.
+                Available Policies:
+                {policies_text}
+                
+                Based on the user's information, risk assessment, and premium calculation, recommend the most suitable policy from the available options.
+                Also suggest 1-2 alternative policies that might be good secondary options.
+                
                 Format your response as JSON with the following structure:
                 {{
                     "recommended_policy": {{
-                        "policy_type": "policy type",
-                        "coverage_amount": <amount>,
-                        "term_length": <years>,
-                        "premium": <amount>,
-                        "recommended_riders": ["rider1", "rider2", ...]
+                        "name": "exact name of the recommended policy",
+                        "policy_type": "Life or Health",
+                        "sub_type": "Term, Whole, Universal, HMO, PPO, etc.",
+                        "coverage_amount": "coverage amount with $ sign",
+                        "term_length": "term length",
+                        "premium": "premium amount with $ sign",
+                        "recommended_riders": ["rider1", "rider2", ...] (optional)
                     }},
                     "alternative_policies": [
                         {{
-                            "policy_type": "alternative policy type",
-                            "coverage_amount": <amount>,
-                            "term_length": <years>,
-                            "premium": <amount>,
-                            "recommended_riders": ["rider1", "rider2", ...]
+                            "name": "exact name of alternative policy",
+                            "policy_type": "Life or Health",
+                            "sub_type": "Term, Whole, Universal, HMO, PPO, etc.",
+                            "coverage_amount": "coverage amount with $ sign",
+                            "term_length": "term length",
+                            "premium": "premium amount with $ sign"
                         }}
                     ],
-                    "explanation": "detailed explanation text",
+                    "explanation": "detailed explanation of why this policy is recommended for this user",
                     "additional_notes": "any additional notes or recommendations"
                 }}
+                
+                IMPORTANT: Only recommend policies from the provided list. Do not invent new policies.
+                Make sure the policy names exactly match one of the available policies.
                 """)
             ]
             
@@ -135,7 +246,21 @@ class PolicyRecommendationAgent:
             # Parse the response to extract policy recommendation
             try:
                 import json
-                policy_recommendation = json.loads(response.content)
+                import re
+                
+                # Try to extract JSON from the response
+                json_match = re.search(r'```json\n(.*?)\n```', response.content, re.DOTALL)
+                if json_match:
+                    policy_recommendation = json.loads(json_match.group(1))
+                else:
+                    policy_recommendation = json.loads(response.content)
+                
+                # Validate that the recommended policy exists in our available policies
+                recommended_policy_name = policy_recommendation["recommended_policy"]["name"]
+                if not any(p["name"] == recommended_policy_name for p in AVAILABLE_POLICIES):
+                    # If not found, select a default policy
+                    policy_recommendation["recommended_policy"]["name"] = AVAILABLE_POLICIES[0]["name"]
+                    policy_recommendation["additional_notes"] = "The originally recommended policy was not found in the available policies. A default policy has been selected."
                 
                 # Update the state
                 return {
@@ -146,25 +271,29 @@ class PolicyRecommendationAgent:
                     "policy_recommendation": policy_recommendation
                 }
             except Exception as e:
+                print(f"Error parsing policy recommendation: {str(e)}")
                 # If parsing fails, return a default policy recommendation
                 default_recommendation = {
                     "recommended_policy": {
-                        "policy_type": "Term Life Insurance",
-                        "coverage_amount": 500000,
-                        "term_length": 20,
-                        "premium": premium_calculation.get("annual_premium", 1000),
+                        "name": AVAILABLE_POLICIES[1]["name"],  # Term Life Insurance - 20 Years
+                        "policy_type": "Life",
+                        "sub_type": "Term",
+                        "coverage_amount": "$500,000",
+                        "term_length": "20 years",
+                        "premium": "$25/month",
                         "recommended_riders": ["Accidental Death Benefit", "Disability Waiver of Premium"]
                     },
                     "alternative_policies": [
                         {
-                            "policy_type": "Whole Life Insurance",
-                            "coverage_amount": 250000,
+                            "name": AVAILABLE_POLICIES[2]["name"],  # Whole Life Insurance
+                            "policy_type": "Life",
+                            "sub_type": "Whole",
+                            "coverage_amount": "$100,000",
                             "term_length": "Lifetime",
-                            "premium": premium_calculation.get("annual_premium", 1000) * 2,
-                            "recommended_riders": ["Critical Illness Rider"]
+                            "premium": "$150/month"
                         }
                     ],
-                    "explanation": "Unable to parse the policy recommendation. This is a default recommendation.",
+                    "explanation": "Unable to parse the policy recommendation. This is a default recommendation based on the most common policy choices.",
                     "additional_notes": "Please consult with an insurance advisor for a more personalized recommendation."
                 }
                 
@@ -191,6 +320,57 @@ class PolicyRecommendationAgent:
         # Compile the graph
         return builder.compile()
     
+    def _get_user_history(self, user_id: str) -> List[Dict[str, Any]]:
+        """
+        Get the recommendation history for a user.
+        
+        Args:
+            user_id: The user ID.
+            
+        Returns:
+            The recommendation history.
+        """
+        # Try to load from checkpoint first
+        try:
+            checkpoint_key = f"recommendation_history_{user_id}"
+            if self.memory_saver.exists(checkpoint_key):
+                return self.memory_saver.get(checkpoint_key)
+        except Exception as e:
+            print(f"Error loading recommendation history from checkpoint: {str(e)}")
+        
+        # Return from memory if checkpoint doesn't exist or loading fails
+        return self.recommendation_history.get(user_id, [])
+    
+    def _update_user_history(self, user_id: str, recommendation: Dict[str, Any]):
+        """
+        Update the recommendation history for a user.
+        
+        Args:
+            user_id: The user ID.
+            recommendation: The recommendation to add to history.
+        """
+        if user_id not in self.recommendation_history:
+            self.recommendation_history[user_id] = []
+        
+        # Add timestamp to recommendation
+        import datetime
+        recommendation_with_timestamp = recommendation.copy()
+        recommendation_with_timestamp["timestamp"] = datetime.datetime.now().isoformat()
+        
+        # Add to history
+        self.recommendation_history[user_id].append(recommendation_with_timestamp)
+        
+        # Keep only the last 5 recommendations to avoid excessive memory usage
+        if len(self.recommendation_history[user_id]) > 5:
+            self.recommendation_history[user_id] = self.recommendation_history[user_id][-5:]
+        
+        # Save to checkpoint
+        try:
+            checkpoint_key = f"recommendation_history_{user_id}"
+            self.memory_saver.put(checkpoint_key, self.recommendation_history[user_id])
+        except Exception as e:
+            print(f"Error saving recommendation history to checkpoint: {str(e)}")
+    
     def invoke(self, user_info: Dict[str, Any], policy_details: Dict[str, Any]) -> Dict[str, Any]:
         """
         Invoke the policy recommendation agent.
@@ -202,6 +382,9 @@ class PolicyRecommendationAgent:
         Returns:
             The policy recommendation result.
         """
+        # Extract user_id for history tracking
+        user_id = user_info.get("user_id", "unknown")
+        
         # Get risk assessment
         risk_assessment = self.risk_agent.invoke(user_info)
         
@@ -220,11 +403,8 @@ class PolicyRecommendationAgent:
         # Run the graph
         result = self.graph.invoke(initial_state)
         
-        # Store the policy recommendation in history
-        user_id = user_info.get("user_id", "unknown")
-        if user_id not in self.recommendation_history:
-            self.recommendation_history[user_id] = []
-        self.recommendation_history[user_id].append(result["policy_recommendation"])
+        # Update the recommendation history
+        self._update_user_history(user_id, result["policy_recommendation"])
         
         return {
             "risk_assessment": risk_assessment,
