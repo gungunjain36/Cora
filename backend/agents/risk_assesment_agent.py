@@ -152,6 +152,8 @@ class RiskAssessmentAgent:
         Returns:
             The risk assessment result.
         """
+        print(f"Risk Assessment Agent - Step 2 in process flow: Assessing risk for user")
+        
         # Initialize the state
         initial_state = {
             "messages": [self.system_message],
@@ -169,5 +171,7 @@ class RiskAssessmentAgent:
         if user_id not in self.risk_history:
             self.risk_history[user_id] = []
         self.risk_history[user_id].append(result["risk_assessment"])
+        
+        print(f"Risk Assessment Agent: Completed risk assessment with score {result['risk_assessment'].get('risk_score')}")
         
         return result["risk_assessment"]
