@@ -173,6 +173,8 @@ class PremiumCalculationAgent:
         Returns:
             The premium calculation result.
         """
+        print(f"Premium Calculation Agent - Step 3 in process flow: Calculating premium")
+        
         # Initialize the state
         initial_state = {
             "messages": [self.system_message],
@@ -190,5 +192,7 @@ class PremiumCalculationAgent:
         if user_id not in self.premium_history:
             self.premium_history[user_id] = []
         self.premium_history[user_id].append(result["premium"])
+        
+        print(f"Premium Calculation Agent: Completed premium calculation with annual premium ${result['premium'].get('annual_premium')}")
         
         return result["premium"]

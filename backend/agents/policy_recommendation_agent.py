@@ -191,22 +191,19 @@ class PolicyRecommendationAgent:
         # Compile the graph
         return builder.compile()
     
-    def invoke(self, user_info: Dict[str, Any], policy_details: Dict[str, Any]) -> Dict[str, Any]:
+    def invoke_with_results(self, user_info: Dict[str, Any], risk_assessment: Dict[str, Any], premium_calculation: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Invoke the policy recommendation agent.
+        Invoke the policy recommendation agent with pre-calculated risk assessment and premium calculation results.
         
         Args:
             user_info: The user information.
-            policy_details: The policy details.
+            risk_assessment: The pre-calculated risk assessment result.
+            premium_calculation: The pre-calculated premium calculation result.
             
         Returns:
             The policy recommendation result.
         """
-        # Get risk assessment
-        risk_assessment = self.risk_agent.invoke(user_info)
-        
-        # Get premium calculation
-        premium_calculation = self.premium_agent.invoke(user_info, risk_assessment, policy_details)
+        print(f"Policy Recommendation Agent - Step 4 in process flow: Recommending policy")
         
         # Initialize the state
         initial_state = {
@@ -225,6 +222,54 @@ class PolicyRecommendationAgent:
         if user_id not in self.recommendation_history:
             self.recommendation_history[user_id] = []
         self.recommendation_history[user_id].append(result["policy_recommendation"])
+        
+        print(f"Policy Recommendation Agent: Completed policy recommendation with policy type {result['policy_recommendation']['recommended_policy']['policy_type']}")
+        
+        return result["policy_recommendation"]
+        
+    def invoke(self, user_info: Dict[str, Any], policy_details: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Invoke the policy recommendation agent.
+        
+        Args:
+            user_info: The user information.
+            policy_details: The policy details.
+            
+        Returns:
+            The policy recommendation result.
+        """
+        print(f"Policy Recommendation Agent - Initiating full policy recommendation flow")
+        
+        # Get risk assessment (Step 2)
+        print(f"Policy Recommendation Agent - Calling Step 2: Risk Assessment")
+        risk_assessment = self.risk_agent.invoke(user_info)
+        
+        # Get premium calculation (Step 3)
+        print(f"Policy Recommendation Agent - Calling Step 3: Premium Calculation")
+        premium_calculation = self.premium_agent.invoke(user_info, risk_assessment, policy_details)
+        
+        # Get policy recommendation (Step 4)
+        print(f"Policy Recommendation Agent - Performing Step 4: Policy Recommendation")
+        
+        # Initialize the state
+        initial_state = {
+            "messages": [self.system_message],
+            "user_info": user_info,
+            "risk_assessment": risk_assessment,
+            "premium_calculation": premium_calculation,
+            "policy_recommendation": None
+        }
+        
+        # Run the graph
+        result = self.graph.invoke(initial_state)
+        
+        # Store the policy recommendation in history
+        user_id = user_info.get("user_id", "unknown")
+        if user_id not in self.recommendation_history:
+            self.recommendation_history[user_id] = []
+        self.recommendation_history[user_id].append(result["policy_recommendation"])
+        
+        print(f"Policy Recommendation Agent: Completed full recommendation flow")
         
         return {
             "risk_assessment": risk_assessment,
