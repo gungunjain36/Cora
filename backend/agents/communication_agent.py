@@ -75,6 +75,8 @@ class CommunicationAgent:
             - Explain coverage amounts and terms
             - Process recommendations based on client risk profile
             
+            Always refer to the user history to maintain context and continuity in the conversation.
+            Refer to the details provided by the user earlier in the conversation to maintain context and don't ask for the details always.
             Be conversational, professional, and concise in your responses.
             You should mention the current stage of the process to the client only when engaged in insurance discussions.
             """
@@ -92,6 +94,7 @@ class CommunicationAgent:
     def risk_agent(self):
         """Lazy initialization of risk agent"""
         if self._risk_agent is None:
+            print("Creating risk agent    mardav chtiya")
             self._risk_agent = RiskAssessmentAgent(self.llm_utility)
         return self._risk_agent
     
@@ -179,14 +182,17 @@ class CommunicationAgent:
             Returns:
                 The updated state.
             """
+            print(state)
             # Step 1: Collect user information
             print(f"Step 1: Collecting user information")
             
             # Get the last user message
             last_message = state["messages"][-1]
             
+            
             # Extract user information from the message
             user_info = state["user_info"] or {}
+            print(f"User info: {user_info}")
             
             # Check if this is the first time we're collecting info (transition from greeting)
             is_first_time = state.get("step_count", 0) <= 1 or len(user_info) == 0

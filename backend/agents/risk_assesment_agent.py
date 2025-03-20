@@ -78,6 +78,7 @@ class RiskAssessmentAgent:
                 Please assess the risk for this user:
                 
                 Age: {user_info.get('age', 'Unknown')}
+                print(f"Age: {user_info.get('age', 'Unknown')}")
                 Gender: {user_info.get('gender', 'Unknown')}
                 Health Conditions: {user_info.get('health_conditions', [])}
                 Smoking Status: {user_info.get('smoking', 'Unknown')}
@@ -104,6 +105,7 @@ class RiskAssessmentAgent:
             try:
                 import json
                 risk_assessment = json.loads(response.content)
+                print(f"Risk assessment chtiya: {risk_assessment}")
                 
                 # Update the state
                 return {
@@ -165,6 +167,7 @@ class RiskAssessmentAgent:
         
         # Run the graph
         result = self.graph.invoke(initial_state)
+        print(f"ABE SAALE: {result}")
         
         # Store the risk assessment in history
         user_id = user_info.get("user_id", "unknown")
