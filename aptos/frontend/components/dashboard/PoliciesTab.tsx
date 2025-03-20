@@ -1,10 +1,4 @@
-type PolicyCard = {
-  id: string;
-  name: string;
-  coverage: string;
-  premium: string;
-  status: "Active" | "Pending" | "Expired";
-};
+import { PolicyCard } from "./types";
 
 type PoliciesTabProps = {
   policies: PolicyCard[];

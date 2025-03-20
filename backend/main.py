@@ -4,6 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 import uvicorn
 from routes.agent_routes import router as agent_router
+from routes.user_routes import router as user_router
+from routes.session_routes import router as session_router
 
 # Create FastAPI instance
 app = FastAPI(
@@ -23,6 +25,8 @@ app.add_middleware(
 
 # Include routers
 app.include_router(agent_router)
+app.include_router(user_router)
+app.include_router(session_router)
 
 # Root endpoint
 @app.get("/")
