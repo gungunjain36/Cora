@@ -67,8 +67,14 @@ class PremiumCalculationAgent:
             """
             # Extract information
             user_info = state["user_info"]
+            print(f"User info: {user_info}")
+            print(type(user_info))
             risk_assessment = state["risk_assessment"]
+            print(f"Risk assessment: {risk_assessment}")
+            print(type(risk_assessment))
             policy_details = state["policy_details"]
+            print(f"Policy details: {policy_details}")
+            print(type(policy_details))
             
             # Create a message for the LLM
             messages = [

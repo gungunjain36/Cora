@@ -102,7 +102,7 @@ class UseLLM:
             tools: A list of tools to bind to the language model.
             
         Returns:
-            The language model instance with tools bound to it.
+            The language model  instance with tools bound to it.
         """
         return self.llm.bind_tools(tools)
     
