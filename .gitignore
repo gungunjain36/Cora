@@ -7,3 +7,6 @@ __pycache__
 *.pyw
 *.pyz
 *.pywz
+node_modules
+Users
+sessions

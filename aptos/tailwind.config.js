@@ -251,29 +251,35 @@ module.exports = {
           paddingRight: "2rem", // px-8
           paddingTop: "1rem", // py-4
           paddingBottom: "1rem", // py-4
-          transform: "translateZ(0)", // transform-gpu
-          transition: "all 300ms ease-in-out", // transition-all duration-300 ease-in-out
-          "&:active": {
-            transform: "translateY(1px)", // active:translate-y-px
-          },
-          "&:hover": {
-            boxShadow: "0px 8px 30px rgba(60, 179, 113, 0.4)",
-          },
-          "& > span:last-child": {
-            position: "relative",
-            display: "flex",
-            alignItems: "center",
-            whiteSpace: "pre-wrap",
-            textAlign: "center",
-            fontSize: theme("fontSize.lg"),
-            lineHeight: "1",
-            fontWeight: "500",
-            letterSpacing: "-0.025em",
-            color: theme("colors.cora.dark"),
-            "@media (min-width: 768px)": {
-              fontSize: theme("fontSize.xl"),
-            },
-          },
+          minWidth: "160px",
+          minHeight: "56px",
+          fontSize: "1.125rem", // text-lg
+          fontWeight: "500", // font-medium
+          color: "rgba(31, 41, 55, 1)", // text-gray-800
+          transition: "all 300ms ease-in-out",
+        },
+        
+        // Cora Button Secondary
+        ".cora-button-secondary": {
+          position: "relative",
+          overflow: "hidden",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          whiteSpace: "nowrap",
+          borderRadius: "9999px", // rounded-full
+          paddingLeft: "2rem", // px-8
+          paddingRight: "2rem", // px-8
+          paddingTop: "1rem", // py-4
+          paddingBottom: "1rem", // py-4
+          minWidth: "160px",
+          minHeight: "56px",
+          fontSize: "1.125rem", // text-lg
+          fontWeight: "500", // font-medium
+          color: "#FFFFFF", // text-white
+          border: "1px solid #3CB371", // border border-cora-primary
+          background: "transparent",
+          transition: "all 300ms ease-in-out",
         },
       });
     }),

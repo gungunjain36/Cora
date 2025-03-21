@@ -6,9 +6,20 @@ import { PoliciesTab } from "./dashboard/PoliciesTab";
 import { ClaimsTab } from "./dashboard/ClaimsTab";
 import { SessionManager } from "./dashboard/SessionManager";
 import { getUserUUID } from "../utils/uuid";
-import { getUserData, createSession, getSession, getUserSessions, addMessage } from "../utils/api";
+import { useAuth } from "@/lib/useAuth";
+import { 
+  getUserData, 
+  createSession, 
+  getSession, 
+  getUserSessions, 
+  addMessage,
+  sendMessageToAgent,
+  getConversationHistory,
+  initializeSession
+} from "../utils/api";
 
 export function Dashboard() {
+  const { user, authenticated, loading: authLoading } = useAuth();
   const [userData, setUserData] = useState<Record<string, any> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -42,21 +53,26 @@ export function Dashboard() {
   useEffect(() => {
     const fetchUserData = async () => {
       try {
-        setLoading(true);
-        // Get the user's UUID
-        const uuid = getUserUUID();
+        if (authLoading) return; // Wait for auth to load
         
-        if (!uuid) {
+        setLoading(true);
+        
+        // Check if user exists from auth
+        if (!authenticated || !user) {
           setError("No user ID found. Please complete onboarding first.");
+          setLoading(false);
           return;
         }
         
-        // Fetch user data from the backend
-        const data = await getUserData(uuid);
-        setUserData(data);
+        // Get UUID from user object or generate one
+        const userId = user.uuid || getUserUUID();
+        
+        // Use user data from auth context or fetch it
+        const userInfo = user || await getUserData(userId);
+        setUserData(userInfo);
         
         // Fetch or create a session
-        await fetchOrCreateSession(uuid);
+        await fetchOrCreateSession(userId);
       } catch (err) {
         console.error("Error fetching user data:", err);
         setError("Failed to load your information. Please try again later.");
@@ -66,7 +82,7 @@ export function Dashboard() {
     };
 
     fetchUserData();
-  }, []);
+  }, [user, authenticated, authLoading]);
 
   const fetchOrCreateSession = async (userId: string) => {
     try {
@@ -79,7 +95,44 @@ export function Dashboard() {
         const sessionId = sessionsData.sessions[0]; // Most recent session
         setCurrentSessionId(sessionId);
         
-        // Fetch the session data
+        // Try to get conversation history from the agent
+        try {
+          const historyData = await getConversationHistory(userId);
+          if (historyData.history && historyData.history.length > 0) {
+            // Convert message timestamp strings back to Date objects for the UI
+            const convertedMessages = historyData.history.map((msg: any) => ({
+              id: msg.id || Date.now().toString(),
+              text: msg.content,
+              sender: msg.role === "user" ? "user" : "agent",
+              timestamp: new Date()
+            }));
+            
+            if (convertedMessages.length > 0) {
+              setMessages(convertedMessages);
+              
+              // Save these messages to the session if they don't exist there
+              for (const msg of convertedMessages) {
+                try {
+                  await addMessage(userId, sessionId, {
+                    id: msg.id,
+                    sender: msg.sender,
+                    text: msg.text,
+                    timestamp: msg.timestamp.toISOString()
+                  });
+                } catch (err) {
+                  console.error("Error saving message to session:", err);
+                }
+              }
+              
+              return;
+            }
+          }
+        } catch (err) {
+          console.error("Error fetching agent history:", err);
+          // Continue with regular session loading if agent history fails
+        }
+        
+        // Fall back to fetching session data if agent history isn't available
         const sessionData = await getSession(userId, sessionId);
         
         // Convert message timestamp strings back to Date objects for the UI
@@ -98,14 +151,50 @@ export function Dashboard() {
         setCurrentSessionId(newSession.session_id);
         setUserSessions([newSession.session_id]);
         
-        // Save the initial greeting message to the session
-        if (messages.length > 0) {
-          const initialMessage = messages[0];
+        // Get a personalized greeting from the communication agent
+        try {
+          const initialGreeting = await initializeSession(
+            userId, 
+            userData || undefined
+          );
+          
+          // Create an initial message with the greeting
+          const initialMessage: Message = {
+            id: "1",
+            sender: "agent",
+            text: initialGreeting.greeting,
+            timestamp: new Date(),
+          };
+          
+          // Set this as the first message
+          setMessages([initialMessage]);
+          
+          // Save it to the session
           await addMessage(userId, newSession.session_id, {
             id: initialMessage.id,
             sender: initialMessage.sender,
             text: initialMessage.text,
             timestamp: initialMessage.timestamp.toISOString()
+          });
+        } catch (error) {
+          console.error("Error getting initial greeting:", error);
+          
+          // Fallback to default greeting if agent fails
+          const defaultMessage: Message = {
+            id: "1",
+            sender: "agent",
+            text: "Hello! I'm Cora, your AI insurance assistant. How can I help you today?",
+            timestamp: new Date(),
+          };
+          
+          setMessages([defaultMessage]);
+          
+          // Save the default message to the session
+          await addMessage(userId, newSession.session_id, {
+            id: defaultMessage.id,
+            sender: defaultMessage.sender,
+            text: defaultMessage.text,
+            timestamp: defaultMessage.timestamp.toISOString()
           });
         }
       }
@@ -115,89 +204,72 @@ export function Dashboard() {
     }
   };
 
-  const handleSendMessage = async () => {
-    if (!inputValue.trim() || !userData?.uuid || !currentSessionId) return;
-
-    // Add user message to UI
-    const userMessage: Message = {
+  const sendMessage = async () => {
+    if (!inputValue.trim()) return;
+    
+    // Create a new message for the UI
+    const newUserMessage: Message = {
       id: Date.now().toString(),
       sender: "user",
       text: inputValue,
       timestamp: new Date(),
     };
     
-    setMessages((prev) => [...prev, userMessage]);
+    const updatedMessages = [...messages, newUserMessage];
+    setMessages(updatedMessages);
     setInputValue("");
     setIsTyping(true);
     
     try {
-      // Save user message to session
-      await addMessage(
-        userData.uuid, 
-        currentSessionId, 
-        {
-          id: userMessage.id,
-          sender: userMessage.sender,
-          text: userMessage.text,
-          timestamp: userMessage.timestamp.toISOString()
-        }
-      );
+      if (!user || !currentSessionId) {
+        throw new Error("No user or session found");
+      }
       
-      // Simulate AI response after a delay
-      setTimeout(async () => {
-        const aiResponse = generateAIResponse(inputValue);
-        setMessages((prev) => [...prev, aiResponse]);
-        setIsTyping(false);
-        
-        // Save AI response to session
-        await addMessage(
-          userData.uuid,
-          currentSessionId as string,
-          {
-            id: aiResponse.id,
-            sender: aiResponse.sender,
-            text: aiResponse.text,
-            timestamp: aiResponse.timestamp.toISOString()
-          }
-        );
-      }, 1500);
-    } catch (error) {
-      console.error("Error saving message:", error);
+      const userUuid = user.uuid || "";
+      
+      // Save user message to session
+      await addMessage(userUuid, currentSessionId, {
+        id: newUserMessage.id,
+        sender: newUserMessage.sender,
+        text: newUserMessage.text,
+        timestamp: newUserMessage.timestamp.toISOString()
+      });
+      
+      // Send message to AI agent and get response
+      const response = await sendMessageToAgent(userUuid, inputValue);
+      
+      // Create agent message from response
+      const agentMessage: Message = {
+        id: Date.now().toString(),
+        sender: "agent",
+        text: response.response || "I'm sorry, I couldn't process that request.",
+        timestamp: new Date(),
+      };
+      
+      // Update messages with agent response
+      setMessages([...updatedMessages, agentMessage]);
+      
+      // Save agent message to session
+      await addMessage(userUuid, currentSessionId, {
+        id: agentMessage.id,
+        sender: agentMessage.sender,
+        text: agentMessage.text,
+        timestamp: agentMessage.timestamp.toISOString()
+      });
+    } catch (err) {
+      console.error("Error sending message:", err);
+      
+      // Add error message
+      const errorMessage: Message = {
+        id: Date.now().toString(),
+        sender: "agent",
+        text: "Sorry, there was an error processing your request. Please try again.",
+        timestamp: new Date(),
+      };
+      
+      setMessages([...updatedMessages, errorMessage]);
+    } finally {
       setIsTyping(false);
-    }
-  };
-
-  const generateAIResponse = (userInput: string): Message => {
-    // This is a placeholder for actual AI integration
-    console.log("User input:", userInput);
-    
-    // Simple response logic based on keywords
-    let responseText = "";
-    
-    if (userInput.toLowerCase().includes("policy") || userInput.toLowerCase().includes("insurance")) {
-      responseText = "I can help you find the right insurance policy based on your needs. Would you like me to recommend a policy for you?";
-    } else if (userInput.toLowerCase().includes("premium") || userInput.toLowerCase().includes("cost")) {
-      responseText = "Premium costs vary based on several factors including your age, health status, and coverage amount. I can calculate a personalized premium for you.";
-    } else if (userInput.toLowerCase().includes("claim")) {
-      responseText = "To file a claim, you'll need to provide some documentation. I can guide you through the process step by step.";
-    } else if (userInput.toLowerCase().includes("hello") || userInput.toLowerCase().includes("hi")) {
-      responseText = "Hello! How can I assist you with your insurance needs today?";
-    } else {
-      responseText = "I'm here to help with all your insurance needs. Could you please provide more details about what you're looking for?";
-    }
-    
-    return {
-      id: Date.now().toString(),
-      sender: "agent",
-      text: responseText,
-      timestamp: new Date(),
-    };
-  };
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
     }
   };
 
@@ -218,7 +290,50 @@ export function Dashboard() {
         sender: msg.sender as "user" | "agent"
       }));
       
-      setMessages(convertedMessages.length > 0 ? convertedMessages : [
+      // Check if we have messages in this session
+      const hasMessages = convertedMessages.length > 0;
+      
+      // If no messages are found in the session, try to fetch from agent history
+      if (!hasMessages) {
+        try {
+          const historyData = await getConversationHistory(userData.uuid);
+          if (historyData.history && historyData.history.length > 0) {
+            // Convert agent history to our message format
+            const agentMessages = historyData.history.map((msg: any) => ({
+              id: msg.id || Date.now().toString(),
+              text: msg.content,
+              sender: msg.role === "user" ? "user" : "agent",
+              timestamp: new Date()
+            }));
+            
+            if (agentMessages.length > 0) {
+              setMessages(agentMessages);
+              
+              // Save these messages to the session
+              for (const msg of agentMessages) {
+                try {
+                  await addMessage(userData.uuid, sessionId, {
+                    id: msg.id,
+                    sender: msg.sender,
+                    text: msg.text,
+                    timestamp: msg.timestamp.toISOString()
+                  });
+                } catch (err) {
+                  console.error("Error saving message to session:", err);
+                }
+              }
+              
+              setLoading(false);
+              return;
+            }
+          }
+        } catch (err) {
+          console.error("Error fetching agent history:", err);
+        }
+      }
+      
+      // Use session messages or default greeting if no messages were found
+      setMessages(hasMessages ? convertedMessages : [
         {
           id: "1",
           sender: "agent" as "agent",
@@ -241,29 +356,63 @@ export function Dashboard() {
       setCurrentSessionId(sessionId);
       setUserSessions((prev) => [sessionId, ...prev]);
       
-      // Reset messages to initial state for new session
+      // Get a personalized greeting from the communication agent
+      const initialGreeting = await initializeSession(userData.uuid, userData);
+      
+      // Create an initial message with the greeting
       const initialMessage: Message = {
+        id: "1",
+        sender: "agent",
+        text: initialGreeting.greeting,
+        timestamp: new Date(),
+      };
+      
+      // Set this as the first message
+      setMessages([initialMessage]);
+      
+      // Save it to the session
+      try {
+        await addMessage(
+          userData.uuid,
+          sessionId,
+          {
+            id: initialMessage.id,
+            sender: initialMessage.sender,
+            text: initialMessage.text,
+            timestamp: initialMessage.timestamp.toISOString()
+          }
+        );
+      } catch (err) {
+        console.error("Error saving initial greeting to session:", err);
+      }
+    } catch (error) {
+      console.error("Error creating new session:", error);
+      
+      // Fallback to default greeting if agent fails
+      const defaultMessage: Message = {
         id: "1",
         sender: "agent",
         text: "Hello! I'm Cora, your AI insurance assistant. How can I help you today?",
         timestamp: new Date(),
       };
       
-      setMessages([initialMessage]);
+      setMessages([defaultMessage]);
       
-      // Save the initial greeting message to the session
-      await addMessage(
-        userData.uuid,
-        sessionId,
-        {
-          id: initialMessage.id,
-          sender: initialMessage.sender,
-          text: initialMessage.text,
-          timestamp: initialMessage.timestamp.toISOString()
-        }
-      );
-    } catch (error) {
-      console.error("Error setting up new session:", error);
+      // Try to save the default message
+      try {
+        await addMessage(
+          userData.uuid,
+          sessionId,
+          {
+            id: defaultMessage.id,
+            sender: defaultMessage.sender,
+            text: defaultMessage.text,
+            timestamp: defaultMessage.timestamp.toISOString()
+          }
+        );
+      } catch (err) {
+        console.error("Error saving default greeting to session:", err);
+      }
     }
   };
 
@@ -287,69 +436,72 @@ export function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-cora-dark">
-      <div className="container mx-auto px-4 py-8">
-        <div className="mb-10 text-center">
-          <h1 className="text-4xl md:text-5xl font-neue font-extrabold gradient_text_2">Insurance Dashboard</h1>
-          <p className="text-cora-light mt-2 text-lg">Your insurance journey, simplified</p>
-        </div>
-        
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Sidebar */}
-          <div className="lg:col-span-3">
-            <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
-            
-            {activeTab === "chat" && userData?.uuid && (
-              <div className="mt-6 bg-black/20 rounded-xl border border-white/10 p-4">
-                <SessionManager 
-                  userId={userData.uuid}
-                  sessionIds={userSessions}
-                  currentSessionId={currentSessionId}
-                  onSessionChange={handleSessionChange}
-                  onSessionCreate={handleSessionCreate}
-                />
-              </div>
-            )}
+    <div className="flex w-full h-screen bg-[#0d1117] text-cora-light">
+      <Sidebar 
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+      />
+      
+      <div className="flex-1 p-6">
+        {loading ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-cora-primary"></div>
           </div>
-          
-          {/* Main Content Area */}
-          <div className="lg:col-span-9 h-[calc(100vh-200px)]">
-            <div className="rounded-3xl transform-gpu transition-all duration-300 hover:shadow-[0px_16px_40px_4px_rgba(46,139,87,0.15)] p-[1px] h-full overflow-hidden bg-gradient-to-b from-cora-gray via-[#60606442] to-cora-secondary w-full">
-              <div className="h-full w-full relative rounded-[23px] overflow-hidden black_card_gradient shadow-2xl">
-                <div className="absolute z-10 w-full h-full p-6">
-                  {activeTab === "chat" && (
+        ) : error ? (
+          <div className="h-full flex flex-col items-center justify-center">
+            <div className="text-center max-w-md mx-auto p-6 backdrop-blur-xl bg-black/30 rounded-2xl border border-white/10 shadow-xl">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-red-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <h2 className="text-xl font-medium mb-4">{error}</h2>
+              <button
+                onClick={() => window.location.reload()}
+                className="px-4 py-2 bg-gradient-to-r from-cora-primary to-cora-secondary text-cora-light rounded-xl hover:opacity-90 transition-opacity"
+              >
+                Try Again
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {activeTab === "chat" && (
+              <>
+                <div className="max-w-5xl mx-auto h-full">
+                  <SessionManager 
+                    userId={user?.uuid || ""}
+                    sessionIds={userSessions}
+                    currentSessionId={currentSessionId}
+                    onSessionCreate={handleSessionCreate}
+                    onSessionChange={handleSessionChange}
+                  />
+                  <div className="mt-4 h-[calc(100%-4rem)]">
                     <ChatTab 
                       messages={messages}
                       isTyping={isTyping}
                       inputValue={inputValue}
                       setInputValue={setInputValue}
-                      handleSendMessage={handleSendMessage}
-                      handleKeyPress={handleKeyPress}
+                      handleSendMessage={sendMessage}
+                      handleKeyPress={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          sendMessage();
+                        }
+                      }}
                     />
-                  )}
-                  
-                  {activeTab === "policies" && (
-                    <PoliciesTab policies={policies} />
-                  )}
-        
-                  {activeTab === "claims" && (
-                    <ClaimsTab policies={policies} setActiveTab={setActiveTab} />
-                  )}
+                  </div>
                 </div>
-                
-                <div
-                  className="absolute inset-0 opacity-10 z-0 pointer-events-none"
-                  style={{
-                    backgroundImage: `url('/assets/dots_svg.svg')`,
-                    backgroundSize: 'cover',
-                    backgroundPosition: 'center',
-                    backgroundRepeat: 'no-repeat',
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
+              </>
+            )}
+            
+            {activeTab === "policies" && (
+              <PoliciesTab policies={policies} />
+            )}
+            
+            {activeTab === "claims" && (
+              <ClaimsTab policies={policies} setActiveTab={setActiveTab} />
+            )}
+          </>
+        )}
       </div>
     </div>
   );

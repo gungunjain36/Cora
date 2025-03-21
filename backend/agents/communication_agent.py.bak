@@ -667,7 +667,7 @@ class CommunicationAgent:
             if (state["conversation_stage"] == "policy_selection" and
                 state["user_info"] and len(state["user_info"]) >= 4 and
                 state["policy_details"] and len(state["policy_details"]) >= 2):
-                print(f"User has provided all required information. Starting recommendation")
+                print(f"User {id(state)} has provided all required information. Starting recommendation")
                 return get_recommendation(state)
             
             # New conversations should not skip stages
@@ -936,48 +936,6 @@ class CommunicationAgent:
                 "step_count": 0  # Initialize step count
             }
             
-            # First try to load user data from the Users folder
-            loaded_user_data = self._load_user_data(user_id)
-            if loaded_user_data:
-                print(f"Loaded user data from Users folder for user {user_id}")
-                user_info = self.conversation_history[user_id]["user_info"]
-                
-                # Map fields from stored user data to our internal structure
-                if "age" in loaded_user_data:
-                    try:
-                        user_info["age"] = int(loaded_user_data["age"])
-                    except (ValueError, TypeError):
-                        user_info["age"] = loaded_user_data["age"]
-                
-                if "gender" in loaded_user_data:
-                    user_info["gender"] = loaded_user_data["gender"]
-                    
-                if "name" in loaded_user_data:
-                    user_info["name"] = loaded_user_data["name"]
-                
-                if "smoker" in loaded_user_data:
-                    user_info["smoking"] = "yes" if loaded_user_data["smoker"] == "Yes" else "no"
-                
-                if "preExistingConditions" in loaded_user_data or "familyHistory" in loaded_user_data:
-                    health_conditions = []
-                    if loaded_user_data.get("preExistingConditions") == "Yes":
-                        health_conditions.append("Has pre-existing conditions")
-                    if loaded_user_data.get("familyHistory") == "Yes":
-                        health_conditions.append("Has family history of serious illnesses")
-                    
-                    if health_conditions:
-                        user_info["health"] = ", ".join(health_conditions)
-                
-                # Add more fields as needed
-                if "income" in loaded_user_data:
-                    user_info["income"] = loaded_user_data["income"]
-                
-                if "maritalStatus" in loaded_user_data:
-                    user_info["marital_status"] = loaded_user_data["maritalStatus"]
-                
-                if "occupation" in loaded_user_data:
-                    user_info["occupation"] = loaded_user_data["occupation"]
-            
             # If user details are provided from the frontend, incorporate them
             if user_details:
                 print(f"Incorporating user details from frontend for user {user_id}")
@@ -1006,6 +964,8 @@ class CommunicationAgent:
                     
                     if health_conditions:
                         user_info["health"] = ", ".join(health_conditions)
+                    else:
+                        user_info["health"] = "No significant health issues reported"
                 
                 # Additional information that might be useful for personalization
                 if "name" in user_details:
@@ -1318,7 +1278,7 @@ class CommunicationAgent:
     
     def invoke(self, message: str, user_id: str = "default_user", user_details: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Invoke the communication agent with a user message (synchronous version).
+        Invoke the communication agent with a user message.
         
         Args:
             message: The user message.
@@ -1328,31 +1288,6 @@ class CommunicationAgent:
         Returns:
             The response from the agent.
         """
-        try:
-            # Use asyncio to run the async method in a synchronous context
-            import asyncio
-            
-            # Create a new event loop if necessary (for thread safety)
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_closed():
-                    raise RuntimeError("Event loop is closed")
-            except (RuntimeError, AssertionError):
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            
-            # Run the async method
-            result = loop.run_until_complete(self.invoke_async(message, user_id, user_details))
-            
-            # Clean up if we created a new loop
-            if asyncio.get_event_loop() != loop:
-                loop.close()
-                
-            return result
-        except Exception as e:
-            print(f"Error in invoke: {str(e)}")
-            return {"response": "I'm sorry, I encountered an error. Please try again.", "conversation_stage": "greeting"}
-            
         # Get or initialize conversation history
         if user_id not in self.conversation_history:
             print(f"Initializing new conversation for user {user_id}")
@@ -1364,6 +1299,84 @@ class CommunicationAgent:
                 "conversation_stage": "greeting",
                 "step_count": 0  # Initialize step count
             }
+            
+            # If user details are provided from the frontend, incorporate them
+            if user_details:
+                print(f"Incorporating user details from frontend for user {user_id}")
+                user_info = self.conversation_history[user_id]["user_info"]
+                policy_details = self.conversation_history[user_id]["policy_details"]
+                
+                # Map frontend fields to our internal user_info structure
+                if "age" in user_details:
+                    try:
+                        user_info["age"] = int(user_details["age"])
+                    except (ValueError, TypeError):
+                        user_info["age"] = user_details["age"]
+                
+                if "gender" in user_details:
+                    user_info["gender"] = user_details["gender"]
+                
+                if "smoker" in user_details:
+                    user_info["smoking"] = "yes" if user_details["smoker"] == "Yes" else "no"
+                
+                if "preExistingConditions" in user_details or "familyHistory" in user_details:
+                    health_conditions = []
+                    if user_details.get("preExistingConditions") == "Yes":
+                        health_conditions.append("Has pre-existing conditions")
+                    if user_details.get("familyHistory") == "Yes":
+                        health_conditions.append("Has family history of serious illnesses")
+                    
+                    if health_conditions:
+                        user_info["health"] = ", ".join(health_conditions)
+                    else:
+                        user_info["health"] = "No significant health issues reported"
+                
+                # Additional information that might be useful for personalization
+                if "name" in user_details:
+                    user_info["name"] = user_details["name"]
+                
+                if "income" in user_details:
+                    user_info["income"] = user_details["income"]
+                
+                if "occupation" in user_details:
+                    user_info["occupation"] = user_details["occupation"]
+                
+                if "email" in user_details:
+                    user_info["email"] = user_details["email"]
+                
+                if "phone" in user_details:
+                    user_info["phone"] = user_details["phone"]
+                
+                # Policy details
+                if "coverageAmount" in user_details:
+                    policy_details["coverage_amount"] = user_details["coverageAmount"]
+                
+                if "policyTerm" in user_details:
+                    policy_details["term_length"] = user_details["policyTerm"]
+                    # Default to Term Life if we have term length
+                    policy_details["policy_type"] = "Term Life Insurance"
+                
+                if "paymentFrequency" in user_details:
+                    policy_details["payment_frequency"] = user_details["paymentFrequency"]
+                
+                if "riders" in user_details:
+                    policy_details["riders"] = user_details["riders"]
+                
+                # Check if we have all required information to start with recommendations
+                required_user_fields = ["age", "gender", "smoking", "health"]
+                required_policy_fields = ["coverage_amount", "policy_type"]
+                
+                has_user_info = all(field in user_info for field in required_user_fields)
+                has_policy_info = all(field in policy_details for field in required_policy_fields)
+                
+                if has_user_info and has_policy_info:
+                    # If we have all required information, set the conversation stage to recommendation
+                    self.conversation_history[user_id]["conversation_stage"] = "recommendation"
+                    print(f"Complete user_details provided. Setting stage to recommendation for user {user_id}")
+                
+                # Log the collected information
+                print(f"User info collected from frontend: {user_info}")
+                print(f"Policy details collected from frontend: {policy_details}")
         
         # Process JSON input if provided
         json_processed = self._process_json_input(message, user_id)
@@ -1533,7 +1546,7 @@ class CommunicationAgent:
     
     def _is_general_question(self, message: str) -> bool:
         """
-        Check if the message is a general question that doesn't require running the full graph.
+        Determine if a message is a general question that should get a quick response.
         
         Args:
             message: The user message.
@@ -1541,67 +1554,41 @@ class CommunicationAgent:
         Returns:
             True if the message is a general question, False otherwise.
         """
-        message = message.lower().strip()
+        # Convert to lowercase for case-insensitive matching
+        message_lower = message.lower()
         
-        # List of terms related to insurance/policies that would require the full graph
-        insurance_terms = [
-            "insurance", "policy", "coverage", "premium", "claim", "beneficiary", 
-            "underwriting", "death benefit", "term", "whole life", "universal", 
-            "rider", "quote", "risk", "application", "health", "medical"
+        # List of common greetings and general questions
+        general_patterns = [
+            "hi", "hello", "hey", "greetings", "good morning", "good afternoon", "good evening",
+            "what can you do", "how can you help", "what do you do", "who are you",
+            "what is this", "how does this work", "tell me about", "explain",
+            "thanks", "thank you", "appreciate it"
         ]
         
-        # Check if message contains any insurance-related terms
-        contains_insurance_terms = any(term in message for term in insurance_terms)
-        
-        # Check if message is a short greeting or general question
-        is_greeting = len(message.split()) <= 7 and any(
-            greeting in message for greeting in [
-                "hi", "hello", "hey", "good morning", "good afternoon", 
-                "good evening", "what's up", "how are you"
-            ]
-        )
-        
-        # Check if it's a simple question about capabilities
-        is_about_capabilities = "what can you" in message or "help me with" in message or "how do you" in message
-        
-        # Return true for greetings or capability questions, but not for insurance-related queries
-        return (is_greeting or is_about_capabilities) and not contains_insurance_terms
-
-    def _load_user_data(self, user_id: str) -> Dict[str, Any]:
-        """
-        Load user data from the Users folder.
-        
-        Args:
-            user_id: The user ID.
-            
-        Returns:
-            User data from the Users folder, or None if not found.
-        """
-        import os
-        import json
-        
-        # Try multiple possible paths for the user file
-        possible_paths = [
-            os.path.join("users", f"{user_id}.json"),  # lowercase folder
-            os.path.join("Users", f"{user_id}.json"),  # uppercase folder
-            os.path.join("users", f"{user_id.split('_')[0]}.json"),  # In case session ID was passed
-            os.path.join("Users", f"{user_id.split('_')[0]}.json")   # In case session ID was passed with uppercase
+        # Patterns for educational questions about insurance (not requesting personalized policy)
+        educational_insurance_patterns = [
+            "what is life insurance", "what is insurance", "what is a policy", 
+            "how does life insurance work", "explain life insurance", "tell me about life insurance",
+            "types of insurance", "types of life insurance", "different policies",
+            "difference between", "explain the difference", "what's the difference",
+            "no, just tell me", "just explain"
         ]
         
-        # Try each path
-        for user_file_path in possible_paths:
-            if os.path.exists(user_file_path):
-                try:
-                    with open(user_file_path, "r") as file:
-                        user_data = json.load(file)
-                        print(f"Loaded user data from {user_file_path}: {user_data}")
-                        return user_data
-                except Exception as e:
-                    print(f"Error loading user data from {user_file_path}: {str(e)}")
-                    continue  # Try the next path
+        # Check if the message contains any of the general patterns
+        for pattern in general_patterns:
+            if pattern in message_lower:
+                return True
+                
+        # Check if this is an educational insurance question
+        for pattern in educational_insurance_patterns:
+            if pattern in message_lower:
+                return True
         
-        print(f"No user file found for user {user_id} in any of these paths: {possible_paths}")
-        return None
+        # Check if the message is very short (likely a greeting)
+        if len(message_lower.split()) <= 5:
+            return True
+        
+        return False
     
     async def _generate_quick_response(self, message: str, user_id: str) -> AIMessage:
         """
@@ -1614,60 +1601,8 @@ class CommunicationAgent:
         Returns:
             An AI message with the quick response.
         """
-        user_info = self.conversation_history[user_id].get("user_info", {}) or {}
+        user_info = self.conversation_history[user_id]["user_info"]
         user_name = user_info.get("name", "")
-        
-        # Check if this is a question about the user's personal information
-        is_about_self = any(pattern in message.lower() for pattern in [
-            "tell me about myself", "who am i", "what do you know about me", 
-            "my information", "my details", "my profile", "what information do you have"
-        ])
-        
-        # If this is a question about the user but we don't have info, try to load it again
-        if is_about_self and (not user_info or len(user_info) == 0):
-            loaded_user_data = self._load_user_data(user_id)
-            if loaded_user_data:
-                print(f"Loaded user data on demand for personal info query: {user_id}")
-                user_info = {}
-                
-                # Map fields from stored user data to our internal structure
-                if "age" in loaded_user_data:
-                    try:
-                        user_info["age"] = int(loaded_user_data["age"])
-                    except (ValueError, TypeError):
-                        user_info["age"] = loaded_user_data["age"]
-                
-                if "gender" in loaded_user_data:
-                    user_info["gender"] = loaded_user_data["gender"]
-                    
-                if "name" in loaded_user_data:
-                    user_info["name"] = loaded_user_data["name"]
-                
-                if "smoker" in loaded_user_data:
-                    user_info["smoking"] = "yes" if loaded_user_data["smoker"] == "Yes" else "no"
-                
-                if "preExistingConditions" in loaded_user_data or "familyHistory" in loaded_user_data:
-                    health_conditions = []
-                    if loaded_user_data.get("preExistingConditions") == "Yes":
-                        health_conditions.append("Has pre-existing conditions")
-                    if loaded_user_data.get("familyHistory") == "Yes":
-                        health_conditions.append("Has family history of serious illnesses")
-                    
-                    if health_conditions:
-                        user_info["health"] = ", ".join(health_conditions)
-                
-                # Add more fields as needed
-                if "income" in loaded_user_data:
-                    user_info["income"] = loaded_user_data["income"]
-                
-                if "maritalStatus" in loaded_user_data:
-                    user_info["marital_status"] = loaded_user_data["maritalStatus"]
-                
-                if "occupation" in loaded_user_data:
-                    user_info["occupation"] = loaded_user_data["occupation"]
-                    
-                # Update the conversation history
-                self.conversation_history[user_id]["user_info"] = user_info
         
         # Check if this is an educational question about insurance
         is_insurance_education = any(pattern in message.lower() for pattern in [
@@ -1697,39 +1632,6 @@ class CommunicationAgent:
                 you'd be happy to help, but don't pressure them for information.
                 """)
             ]
-        elif is_about_self:
-            # Create a message for information about the user
-            if user_info and len(user_info) > 0:
-                # We have user information
-                messages = [
-                    self.system_message,
-                    HumanMessage(content=f"""
-                    The user has asked about their personal information: "{message}"
-                    
-                    User details we have:
-                    {user_info}
-                    
-                    Provide a friendly summary of the information we have about them. Use their name
-                    if available. Mention key details like their age, gender, health status, etc.
-                    Be conversational and friendly. If there are gaps in our information, you can acknowledge that.
-                    
-                    Don't ask for additional information - just summarize what we already know.
-                    """)
-                ]
-            else:
-                # We don't have user information
-                messages = [
-                    self.system_message,
-                    HumanMessage(content=f"""
-                    The user has asked about their personal information: "{message}"
-                    
-                    We don't have any user information stored yet.
-                    
-                    Explain that you don't have their information yet, but that you can help them with other questions.
-                    Invite them to complete the onboarding process if they'd like to share their details for personalized
-                    insurance recommendations. Be conversational and friendly.
-                    """)
-                ]
         else:
             # Create a message for the LLM for other general questions
             messages = [
@@ -1750,14 +1652,9 @@ class CommunicationAgent:
                 """)
             ]
         
-        try:
-            # Get response from LLM with a shorter timeout
-            response = await self.llm_utility.ainvoke(messages, temperature=0.7, max_tokens=400)
-            return response
-        except Exception as e:
-            print(f"Error generating quick response: {str(e)}")
-            # Fallback response in case of error
-            return AIMessage(content="Hello! I'm here to help with any questions you have about insurance or general topics. How can I assist you today?")
+        # Get response from LLM with a shorter timeout
+        response = await self.llm_utility.ainvoke(messages, temperature=0.7, max_tokens=400)
+        return response
     
     def _generate_quick_response_sync(self, message: str, user_id: str) -> AIMessage:
         """
@@ -1797,6 +1694,19 @@ class CommunicationAgent:
                 Focus on being informative and educational rather than trying to sell a policy.
                 Don't ask for personal information - just explain the concept they're asking about.
                 
+                After explaining, you can mention that if they're interested in personalized recommendations later,
+                you'd be happy to help, but don't pressure them for information.
+                """)
+            ]
+        else:
+            # Create a message for the LLM for other general questions
+            messages = [
+                self.system_message,
+                HumanMessage(content=f"""
+                The user has sent a general message: "{message}"
+                
+                User details we already have:
+                {user_info}
                 
                 Provide a quick, friendly response that:
                 1. Greets them by name if available

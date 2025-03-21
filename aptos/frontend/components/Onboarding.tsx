@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useWallet } from "@aptos-labs/wallet-adapter-react";
 import { getUserUUID } from "../utils/uuid";
 import { registerUser } from "../utils/api";
+import { useAuth } from "@/lib/useAuth";
 
 type OnboardingStep = {
   id: string;
@@ -207,7 +207,7 @@ export function Onboarding() {
   const [showTooltip, setShowTooltip] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const navigate = useNavigate();
-  const { account } = useWallet();
+  const { user, navigateByAuthState } = useAuth();
 
   const handleInputChange = (fieldId: string, value: string) => {
     setFormData((prev) => ({
@@ -242,8 +242,8 @@ export function Onboarding() {
     try {
       setIsSubmitting(true);
       
-      // Get or generate a UUID for the user
-      const userUUID = getUserUUID();
+      // Use the Privy user ID from the auth context instead of generating a new UUID
+      const userUUID = user?.uuid || getUserUUID();
       
       // Process form data to ensure proper types
       const processedFormData: Record<string, any> = {};
@@ -255,7 +255,7 @@ export function Onboarding() {
       // Prepare complete user data with UUID
       const userData = {
         uuid: userUUID,
-        walletAddress: account?.address ? String(account.address) : "",
+        walletAddress: user?.walletAddress || "",
         ...processedFormData
       };
       
