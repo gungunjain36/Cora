@@ -1,7 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { SplineSceneBasic } from "../components/ui/spline-demo";
 import { useAuth } from "@/lib/useAuth";
-import { ConnectWalletButton } from "./ui/ConnectWalletButton";
 
 export function Hero() {
   const { authenticated, login, isOnboarded, navigateByAuthState } = useAuth();
@@ -33,14 +32,8 @@ export function Hero() {
   };
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-[calc(100vh-100px)] px-4 md:px-8 lg:px-16 2xl:px-[116px] py-16">
-      {/* Wallet Connection Button */}
-      <div className="fixed top-6 right-6 md:top-8 md:right-8 z-50">
-        <ConnectWalletButton 
-          variant="secondary" 
-          className="shadow-xl backdrop-blur-md"
-        />
-      </div>
+    <div className="flex flex-col items-center justify-center min-h-[calc(100vh-100px)] px-4 md:px-8 lg:px-16 2xl:px-[116px] py-16 pt-20">
+      {/* Removed wallet connection button since it's now in the Navbar */}
       
       <div className="flex flex-col md:flex-row items-center justify-between w-full gap-8">
         {/* Left side content */}

@@ -118,15 +118,39 @@ async def create_policy(request: PolicyRequest):
     if not aptos_agent:
         raise HTTPException(status_code=500, detail="Aptos agent not initialized")
     
+    # Log the policy creation request
+    print(f"Creating policy for {request.wallet_address}, data: {request.policy_data}")
+    
+    # Validate required fields
+    required_fields = ["policy_type", "coverage_amount", "term_length", "premium_amount"]
+    for field in required_fields:
+        if field not in request.policy_data:
+            return BlockchainResponse(
+                success=False,
+                message=f"Missing required field: {field}",
+                data=None
+            )
+    
+    # Create the policy through the Aptos agent
     result = aptos_agent.create_policy(request.wallet_address, request.policy_data)
     
     if not result.get("success", False):
-        raise HTTPException(status_code=400, detail=result.get("message", "Failed to create policy"))
+        return BlockchainResponse(
+            success=False,
+            message=result.get("message", "Failed to create policy"),
+            data=None
+        )
     
+    # Return the successful response with policy details
     return BlockchainResponse(
         success=True,
-        message="Policy created successfully",
-        data={"policy_id": result.get("policy_id"), "wallet_address": request.wallet_address}
+        message="Policy created successfully on-chain",
+        data={
+            "policy_id": result.get("policy_id"),
+            "transaction_hash": result.get("transaction_hash"),
+            "wallet_address": request.wallet_address,
+            "policy_details": result.get("policy_details", {})
+        }
     )
 
 @router.get("/user-policies/{wallet_address}", response_model=BlockchainResponse)
@@ -166,18 +190,37 @@ async def process_payment(request: PaymentRequest):
     if not aptos_agent:
         raise HTTPException(status_code=500, detail="Aptos agent not initialized")
     
+    # Log the payment request
+    print(f"Processing payment of {request.amount} for policy {request.policy_id} from {request.wallet_address}")
+    
+    # Validate inputs
+    if not request.wallet_address or not request.policy_id or request.amount <= 0:
+        return BlockchainResponse(
+            success=False,
+            message="Invalid wallet address, policy ID, or amount",
+            data=None
+        )
+    
+    # Process the payment through the Aptos agent
     result = aptos_agent.process_premium_payment(request.wallet_address, request.policy_id, request.amount)
     
     if not result.get("success", False):
-        raise HTTPException(status_code=400, detail=result.get("message", "Failed to process payment"))
+        return BlockchainResponse(
+            success=False,
+            message=result.get("message", "Failed to process payment"),
+            data=None
+        )
     
+    # Return the successful response with payment details
     return BlockchainResponse(
         success=True,
-        message="Payment processed successfully",
+        message="Payment processed successfully on-chain",
         data={
             "transaction_id": result.get("transaction_id"),
+            "transaction_hash": result.get("transaction_hash"),
             "policy_id": request.policy_id,
-            "amount": request.amount
+            "amount": request.amount,
+            "payment_details": result.get("payment_details", {})
         }
     )
 

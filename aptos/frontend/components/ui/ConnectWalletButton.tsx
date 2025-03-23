@@ -1,5 +1,6 @@
 import { useAuth } from "@/lib/useAuth";
 import { useState, useEffect } from "react";
+import { useWallet } from "@aptos-labs/wallet-adapter-react";
 
 interface ConnectWalletButtonProps {
   className?: string;
@@ -13,6 +14,7 @@ export function ConnectWalletButton({
   fullWidth = false 
 }: ConnectWalletButtonProps) {
   const { authenticated, login, user, connectWallet } = useAuth();
+  const { account, connect, connected, wallets } = useWallet();
   const [isLoading, setIsLoading] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [showTooltip, setShowTooltip] = useState(false);
@@ -20,7 +22,8 @@ export function ConnectWalletButton({
   // Debug output to console
   useEffect(() => {
     console.log("Auth state:", { authenticated, user });
-  }, [authenticated, user]);
+    console.log("Wallet state:", { connected, account });
+  }, [authenticated, user, connected, account]);
   
   useEffect(() => {
     // Hide tooltip after 2 seconds when displayed
@@ -32,6 +35,23 @@ export function ConnectWalletButton({
     }
   }, [showTooltip]);
   
+  // Function to connect Aptos wallet
+  const connectAptosWallet = async () => {
+    try {
+      // Check if we have any Aptos wallets available
+      if (wallets.length > 0) {
+        // Try to connect with the first available wallet
+        await connect(wallets[0].name);
+        console.log("Connected to Aptos wallet:", wallets[0].name);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error("Error connecting to Aptos wallet:", error);
+      return false;
+    }
+  };
+  
   const handleConnect = async () => {
     try {
       setIsLoading(true);
@@ -39,9 +59,18 @@ export function ConnectWalletButton({
       if (!authenticated) {
         // If not authenticated, trigger login flow
         await login();
-      } else if (!user?.walletAddress) {
-        // If authenticated but no wallet connected, trigger wallet connection
-        await connectWallet();
+      } else if (!user?.walletAddress && !connected) {
+        // Try to connect Privy wallet first
+        try {
+          await connectWallet();
+        } catch (privyError) {
+          console.error("Error connecting Privy wallet, trying Aptos wallet:", privyError);
+          // If Privy wallet connection fails, try Aptos wallet
+          await connectAptosWallet();
+        }
+      } else if (!connected) {
+        // If Privy is connected but not Aptos, connect Aptos
+        await connectAptosWallet();
       } else {
         // If already connected, show address tooltip
         setShowTooltip(true);
@@ -53,16 +82,16 @@ export function ConnectWalletButton({
     }
   };
   
-  // Force connected state for testing
-  const hasWallet = user?.walletAddress ? true : false;
+  // Determine if any wallet is connected
+  const hasWallet = user?.walletAddress || connected;
   
   // Determine button text based on auth state
   const buttonText = () => {
     if (isLoading) return "Connecting...";
     if (!authenticated) return "Connect Wallet";
     if (hasWallet) {
-      // Truncate wallet address for display
-      const address = user?.walletAddress || '';
+      // Use Aptos wallet address if available, otherwise use Privy wallet
+      const address = account?.address?.toString() || user?.walletAddress || '';
       return `${address.slice(0, 4)}...${address.slice(-4)}`;
     }
     return "Connect Wallet";
@@ -144,7 +173,7 @@ export function ConnectWalletButton({
       </span>
       {showTooltip && hasWallet && (
         <div className="absolute -bottom-12 left-1/2 transform -translate-x-1/2 bg-black/80 text-cora-light rounded-lg px-3 py-2 text-xs whitespace-nowrap backdrop-blur-sm border border-white/10 z-50">
-          {user?.walletAddress}
+          {account?.address?.toString() || user?.walletAddress}
           <div className="absolute -top-2 left-1/2 transform -translate-x-1/2 border-8 border-transparent border-b-black/80"></div>
         </div>
       )}
@@ -196,7 +225,7 @@ export function ConnectWalletButton({
       )}
       {showTooltip && hasWallet && (
         <div className="absolute -bottom-12 left-1/2 transform -translate-x-1/2 bg-black/80 text-cora-light rounded-lg px-3 py-2 text-xs whitespace-nowrap backdrop-blur-sm border border-white/10 z-50">
-          {user?.walletAddress}
+          {account?.address?.toString() || user?.walletAddress}
           <div className="absolute -top-2 left-1/2 transform -translate-x-1/2 border-8 border-transparent border-b-black/80"></div>
         </div>
       )}

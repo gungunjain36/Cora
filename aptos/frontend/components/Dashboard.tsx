@@ -4,11 +4,11 @@ import { Sidebar } from "./dashboard/Sidebar";
 import { ChatTab } from "./dashboard/ChatTab";
 import { PoliciesTab } from "./dashboard/PoliciesTab";
 import { ClaimsTab } from "./dashboard/ClaimsTab";
-import { SessionManager } from "./dashboard/SessionManager";
 import { getUserUUID } from "../utils/uuid";
 import { useAuth } from "@/lib/useAuth";
 import { useWallet } from "@aptos-labs/wallet-adapter-react";
 import { blockchainService } from "../utils/blockchainService";
+import { useLocation } from "react-router-dom";
 import { 
   getUserData, 
   createSession, 
@@ -23,6 +23,7 @@ import {
 export function Dashboard() {
   const { user, authenticated, loading: authLoading } = useAuth();
   const { account } = useWallet();
+  const location = useLocation();
   const [userData, setUserData] = useState<Record<string, any> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +53,21 @@ export function Dashboard() {
       ]
     }
   ]);
+  const [dashboardReady, setDashboardReady] = useState(false);
+  const [isCreatingSession, setIsCreatingSession] = useState(false);
+
+  // Parse URL parameters to set the active tab
+  useEffect(() => {
+    const searchParams = new URLSearchParams(location.search);
+    const tabParam = searchParams.get('tab');
+    
+    // Set active tab based on URL parameter if it exists and is valid
+    if (tabParam) {
+      if (tabParam === 'policies' || tabParam === 'claims' || tabParam === 'chat') {
+        setActiveTab(tabParam);
+      }
+    }
+  }, [location.search]);
 
   useEffect(() => {
     const fetchUserData = async () => {
@@ -74,25 +90,28 @@ export function Dashboard() {
         const userInfo = user || await getUserData(userId);
         setUserData(userInfo);
         
-        // If wallet is connected, verify or create wallet mapping
+        // If wallet is connected, verify wallet mapping
         if (account?.address && userInfo?.uuid) {
           try {
+            console.log("Wallet connection detected. Verifying wallet mapping...");
             // Check if wallet is already mapped
-            const mappingResult = await blockchainService.verifyWallet(userInfo.uuid, account.address);
+            const mappingResult = await blockchainService.verifyWalletMapping(account.address.toString());
             
-            // If not mapped, create mapping
-            if (!mappingResult.success) {
-              await blockchainService.createWalletMapping(userInfo.uuid, account.address);
-              console.log("Created new wallet mapping");
-            } else {
+            if (mappingResult.success) {
               console.log("Wallet mapping verified");
+              // After successful wallet mapping verification, fetch policies
+              fetchUserPolicies(account.address.toString());
+            } else {
+              console.log("Wallet mapping verification failed");
             }
-            
-            // After successful wallet mapping or verification, fetch policies
-            fetchUserPolicies(account.address);
           } catch (err) {
             console.error("Error with wallet mapping:", err);
           }
+        } else {
+          console.log("No wallet connected or user ID missing", { 
+            walletConnected: !!account?.address, 
+            userIdExists: !!userInfo?.uuid 
+          });
         }
         
         // Fetch or create a session
@@ -102,6 +121,11 @@ export function Dashboard() {
         setError("Failed to load your information. Please try again later.");
       } finally {
         setLoading(false);
+        
+        // Delay setting dashboardReady to allow for animation
+        setTimeout(() => {
+          setDashboardReady(true);
+        }, 300);
       }
     };
 
@@ -114,19 +138,38 @@ export function Dashboard() {
       const result = await blockchainService.getUserPolicies(walletAddress);
       
       if (result.success && result.data?.policies) {
-        // Map blockchain policies to the PolicyCard format
-        const formattedPolicies = result.data.policies.map((policy: any) => ({
-          id: policy.policy_id,
-          name: policy.policy_type,
-          coverage: `$${policy.coverage_amount?.toLocaleString()}`,
-          premium: `$${policy.premium_amount?.toLocaleString()}/year`,
-          status: policy.status || "Active",
-          details: [
-            { label: "Start Date", value: policy.start_date || "N/A" },
-            { label: "End Date", value: policy.end_date || "N/A" },
-            { label: "Policy Type", value: policy.policy_type || "Standard" }
-          ]
-        }));
+        // Map blockchain policies to the PolicyCard format with payment info
+        const formattedPolicies = result.data.policies.map((policy: any) => {
+          // Calculate if payment is due
+          const startDate = new Date(policy.start_date || Date.now());
+          const now = new Date();
+          const daysSinceStart = Math.floor((now.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+          const paymentDue = policy.status === 'Pending' || (daysSinceStart > 0 && daysSinceStart % 365 === 0);
+          
+          // Create next payment date (1 year after start date)
+          const paymentDate = new Date(startDate);
+          paymentDate.setFullYear(paymentDate.getFullYear() + 1);
+          
+          return {
+            id: policy.policy_id,
+            name: policy.policy_type || 'Life Insurance Policy',
+            coverage: `$${(policy.coverage_amount || 0).toLocaleString()}`,
+            premium: `$${(policy.premium || 0).toLocaleString()} / year`,
+            status: policy.status || 'Active',
+            premiumAmount: policy.premium || 0,
+            txHash: policy.transaction_hash,
+            policyCreationDate: policy.start_date,
+            paymentDue: paymentDue,
+            paymentDueDate: paymentDate.toISOString().split('T')[0],
+            nextPaymentAmount: policy.premium || 0,
+            details: [
+              { label: 'Policy Type', value: policy.policy_type || 'N/A' },
+              { label: 'Term Length', value: `${policy.term_length || 'N/A'} years` },
+              { label: 'Start Date', value: policy.start_date || 'N/A' },
+              { label: 'End Date', value: policy.end_date || 'N/A' },
+            ]
+          };
+        });
         
         setPolicies(formattedPolicies);
       }
@@ -257,6 +300,17 @@ export function Dashboard() {
 
   const sendMessage = async () => {
     if (!inputValue.trim()) return;
+    
+    // Check if wallet is connected when needed for blockchain operations
+    if (!account?.address && inputValue.toLowerCase().includes("policy")) {
+      setMessages([...messages, {
+        id: Date.now().toString(),
+        sender: "agent",
+        text: "To interact with policies or create new insurance products, you'll need to connect your wallet first. Please use the connect wallet button in the navbar.",
+        timestamp: new Date(),
+      }]);
+      return;
+    }
     
     // Create a new message for the UI
     const newUserMessage: Message = {
@@ -467,89 +521,176 @@ export function Dashboard() {
     }
   };
 
-  if (loading) {
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
+
+  // Handle creating a new session
+  const handleCreateSession = async (userId: string) => {
+    try {
+      setIsCreatingSession(true);
+      const newSession = await createSession(userId);
+      handleSessionCreate(newSession.session_id);
+    } catch (error) {
+      console.error('Error creating new session:', error);
+    } finally {
+      setIsCreatingSession(false);
+    }
+  };
+
+  if (loading && !dashboardReady) {
     return (
-      <div className="container mx-auto px-4 py-8">
-        <h1 className="text-3xl font-bold mb-6">Loading your dashboard...</h1>
+      <div className="flex flex-col items-center justify-center h-screen bg-gradient-to-b from-[#0d1117] to-[#161b22] text-cora-light pt-16">
+        <div className="flex flex-col items-center">
+          <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-cora-primary via-cora-secondary to-cora-light flex items-center justify-center shadow-lg mb-6 animate-pulse">
+            <span className="text-[#0d1117] font-bold text-3xl">C</span>
+          </div>
+          <h1 className="text-2xl font-bold mb-2">Loading your dashboard</h1>
+          <div className="flex space-x-2 mt-4">
+            <div className="w-3 h-3 rounded-full bg-cora-primary animate-bounce"></div>
+            <div className="w-3 h-3 rounded-full bg-cora-primary animate-bounce delay-100"></div>
+            <div className="w-3 h-3 rounded-full bg-cora-primary animate-bounce delay-200"></div>
+          </div>
+        </div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="container mx-auto px-4 py-8">
-        <h1 className="text-3xl font-bold mb-6">Dashboard Error</h1>
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
-          {error}
+      <div className="flex items-center justify-center h-screen bg-gradient-to-b from-[#0d1117] to-[#161b22] text-cora-light pt-16">
+        <div className="text-center max-w-md mx-auto p-8 backdrop-blur-xl bg-black/40 rounded-2xl border border-white/10 shadow-2xl">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-red-500 mx-auto mb-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <h2 className="text-2xl font-medium mb-4">Dashboard Error</h2>
+          <p className="mb-6 text-cora-gray">{error}</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="px-6 py-3 bg-gradient-to-r from-cora-primary to-cora-secondary text-cora-light rounded-xl hover:opacity-90 transition-all shadow-lg shadow-cora-primary/20 transform hover:scale-105"
+            title="Reload dashboard"
+            aria-label="Reload dashboard"
+          >
+            Try Again
+          </button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex w-full h-screen bg-[#0d1117] text-cora-light">
-      <Sidebar 
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-      />
+    <div className={`flex flex-col md:flex-row w-full h-screen bg-gradient-to-b from-[#0d1117] to-[#161b22] text-cora-light transition-opacity duration-500 pt-16 ${dashboardReady ? 'opacity-100' : 'opacity-0'}`}>
+      <div className="md:w-64 lg:w-72 p-2 hidden md:block overflow-hidden">
+        <Sidebar 
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          sessionIds={userSessions}
+          currentSessionId={currentSessionId}
+          onSessionChange={handleSessionChange}
+          onSessionCreate={handleCreateSession}
+          isCreatingSession={isCreatingSession}
+          userId={user?.uuid || ""}
+        />
+      </div>
       
-      <div className="flex-1 p-6">
+      <div className="fixed bottom-0 left-0 right-0 z-30 bg-black/60 backdrop-blur-md border-t border-white/10 md:hidden">
+        <div className="flex justify-around py-3">
+          <button 
+            onClick={() => setActiveTab("chat")}
+            className={`flex flex-col items-center px-5 py-2 rounded-xl transition-all ${
+              activeTab === "chat" 
+                ? "text-cora-primary" 
+                : "text-cora-gray"
+            }`}
+            title="Chat with Cora"
+            aria-label="Chat with Cora"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M18 10c0 3.866-3.582 7-8 7a8.841 8.841 0 01-4.083-.98L2 17l1.338-3.123C2.493 12.767 2 11.434 2 10c0-3.866 3.582-7 8-7s8 3.134 8 7zM7 9H5v2h2V9zm8 0h-2v2h2V9zM9 9h2v2H9V9z" clipRule="evenodd" />
+            </svg>
+            <span className="text-xs mt-1">Chat</span>
+          </button>
+          <button 
+            onClick={() => setActiveTab("policies")}
+            className={`flex flex-col items-center px-5 py-2 rounded-xl transition-all ${
+              activeTab === "policies" 
+                ? "text-cora-primary" 
+                : "text-cora-gray"
+            }`}
+            title="My Policies"
+            aria-label="My Policies"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M9 2a2 2 0 00-2 2v8a2 2 0 002 2h6a2 2 0 002-2V6.414A2 2 0 0016.414 5L14 2.586A2 2 0 0012.586 2H9z" />
+              <path d="M3 8a2 2 0 012-2v10h8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
+            </svg>
+            <span className="text-xs mt-1">Policies</span>
+          </button>
+          <button 
+            onClick={() => setActiveTab("claims")}
+            className={`flex flex-col items-center px-5 py-2 rounded-xl transition-all ${
+              activeTab === "claims" 
+                ? "text-cora-primary" 
+                : "text-cora-gray"
+            }`}
+            title="File a Claim"
+            aria-label="File a Claim"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M5 2a1 1 0 011 1v1h1a1 1 0 010 2H6v1a1 1 0 01-2 0V6H3a1 1 0 010-2h1V3a1 1 0 011-1zm0 10a1 1 0 011 1v1h1a1 1 0 110 2H6v1a1 1 0 11-2 0v-1H3a1 1 0 110-2h1v-1a1 1 0 011-1zM12 2a1 1 0 01.967.744L14.146 7.2 17.5 9.134a1 1 0 010 1.732l-3.354 1.935-1.18 4.455a1 1 0 01-1.933 0L9.854 12.8 6.5 10.866a1 1 0 010-1.732l3.354-1.935 1.18-4.455A1 1 0 0112 2z" clipRule="evenodd" />
+            </svg>
+            <span className="text-xs mt-1">Claims</span>
+          </button>
+          <button 
+            className="flex flex-col items-center px-5 py-2 text-cora-gray"
+            title="View Profile"
+            aria-label="View Profile"
+          >
+            <div className="h-6 w-6 rounded-full bg-cora-primary flex items-center justify-center">
+              <span className="text-xs font-bold text-black">
+                {user?.name?.charAt(0) || "C"}
+              </span>
+            </div>
+            <span className="text-xs mt-1">Profile</span>
+          </button>
+        </div>
+      </div>
+      
+      <div className="flex-1 p-2 md:p-4 overflow-y-auto pb-20 md:pb-6">
         {loading ? (
           <div className="flex items-center justify-center h-full">
-            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-cora-primary"></div>
-          </div>
-        ) : error ? (
-          <div className="h-full flex flex-col items-center justify-center">
-            <div className="text-center max-w-md mx-auto p-6 backdrop-blur-xl bg-black/30 rounded-2xl border border-white/10 shadow-xl">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-red-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-              <h2 className="text-xl font-medium mb-4">{error}</h2>
-              <button
-                onClick={() => window.location.reload()}
-                className="px-4 py-2 bg-gradient-to-r from-cora-primary to-cora-secondary text-cora-light rounded-xl hover:opacity-90 transition-opacity"
-              >
-                Try Again
-              </button>
-            </div>
+            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-cora-primary"></div>
           </div>
         ) : (
           <>
             {activeTab === "chat" && (
-              <>
-                <div className="max-w-5xl mx-auto h-full">
-                  <SessionManager 
-                    userId={user?.uuid || ""}
-                    sessionIds={userSessions}
-                    currentSessionId={currentSessionId}
-                    onSessionCreate={handleSessionCreate}
-                    onSessionChange={handleSessionChange}
+              <div className="max-w-4xl mx-auto h-full transform transition-all duration-300 opacity-100 scale-100">
+                <div className="h-full">
+                  <ChatTab 
+                    messages={messages}
+                    isTyping={isTyping}
+                    inputValue={inputValue}
+                    setInputValue={setInputValue}
+                    handleSendMessage={sendMessage}
+                    handleKeyPress={handleKeyPress}
                   />
-                  <div className="mt-4 h-[calc(100%-4rem)]">
-                    <ChatTab 
-                      messages={messages}
-                      isTyping={isTyping}
-                      inputValue={inputValue}
-                      setInputValue={setInputValue}
-                      handleSendMessage={sendMessage}
-                      handleKeyPress={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          sendMessage();
-                        }
-                      }}
-                    />
-                  </div>
                 </div>
-              </>
+              </div>
             )}
             
             {activeTab === "policies" && (
-              <PoliciesTab userId={user?.uuid || ""} />
+              <div className="max-w-4xl mx-auto transform transition-all duration-300 opacity-100 scale-100">
+                <PoliciesTab userId={user?.uuid || ""} />
+              </div>
             )}
             
             {activeTab === "claims" && (
-              <ClaimsTab userId={user?.uuid || ""} />
+              <div className="max-w-4xl mx-auto transform transition-all duration-300 opacity-100 scale-100">
+                <ClaimsTab userId={user?.uuid || ""} />
+              </div>
             )}
           </>
         )}
