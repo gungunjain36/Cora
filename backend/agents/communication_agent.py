@@ -1,23 +1,19 @@
-# This is the communication agent that is responsible for handling the communication with the client.
-# It is responsible for receiving the client's messages and sending the appropriate responses.
-# It is also responsible for keeping track of the conversation history.
-# This agent takes the user information and asks the "premium calculation" agent to calculate the premium and "risk assessment" agent to assess the risk.
-# The output from these agents is then used to recommend the appropriate policy to the user via the "policy recommendation" agent.
-# This agent basically acts as a middleman between the client and the other agents.
-# This agent delegates the tasks to the other agents and then sends the appropriate response to the client.
-
 import asyncio
+import os
+import json
+import re
 from typing import Dict, List, Any, TypedDict, Annotated, Sequence, Literal, Optional, Tuple, Union, cast
 from langchain.schema import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolExecutor
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint import MemorySaver
-from  utils.useLLM import UseLLM
-from  agents.policy_recommendation_agent import PolicyRecommendationAgent
-from  agents.risk_assesment_agent import RiskAssessmentAgent
-from  agents.premium_calculation_agent import PremiumCalculationAgent
+from utils.useLLM import UseLLM
+from agents.policy_recommendation_agent import PolicyRecommendationAgent
+from agents.risk_assesment_agent import RiskAssessmentAgent
+from agents.premium_calculation_agent import PremiumCalculationAgent
 import concurrent.futures
+from functools import partial
 
 # Maximum number of concurrent operations
 MAX_CONCURRENCY = 5
@@ -28,29 +24,29 @@ class CommunicationState(TypedDict):
     user_info: Optional[Dict[str, Any]]
     policy_details: Optional[Dict[str, Any]]
     recommendation_result: Optional[Dict[str, Any]]
-    conversation_stage: Literal["greeting", "general_conversation", "collecting_info", "policy_selection", "recommendation", "followup", "completed"]
+    conversation_stage: Literal["greeting", "general_conversation", "collecting_info", "policy_selection", "recommendation", "followup", "completed", "policy_acceptance"]
     step_count: int  # Track the number of steps to prevent infinite loops
 
 class CommunicationAgent:
     """
     Agent responsible for handling communication with the client and coordinating with other agents.
     """
-    
+
     def __init__(self, llm_utility: UseLLM):
         """
         Initialize the communication agent.
-        
+
         Args:
             llm_utility: The LLM utility to use for interacting with language models.
         """
         self.llm_utility = llm_utility
         self.llm = llm_utility.get_llm()
-        
-        # Create the other agents lazily - only when needed
+
+        # Lazy initialization of other agents
         self._risk_agent = None
         self._premium_agent = None
         self._policy_agent = None
-        
+
         self.system_message = llm_utility.create_system_message(
             """You are Cora, a friendly and versatile AI assistant that can handle both general conversations and specialized insurance-related inquiries.
 
@@ -59,59 +55,350 @@ class CommunicationAgent:
             - Engage in friendly chit-chat about any subject the user brings up
             - Provide thoughtful responses about technology, news, entertainment, general knowledge, etc.
             - Be conversational, professional, and concise in your responses
-            
-            For insurance-related conversations, follow this IMPORTANT PROCESS only AFTER the user brings up life insurance or health insurance:
-            1. Collect the client information only after the user has started the conversation about life insurance or health insurance.
-            2. Only after collecting this information, provide the details to the "risk assessment" agent to calculate the risk and the "premium calculation" agent to calculate the premium.
-            3. Only after the risk and premium are calculated, provide the details to the "policy recommendation" agent to recommend the best policy.
-            4. Only after the policy is recommended, provide the details to the "follow up" agent to follow up with the client. 
-            5. Only after the follow up is completed, the conversation is over.
 
-            ALWAYS follow this sequence exactly as described, but ONLY initiate it when the user explicitly asks about insurance policies or coverage. Do not proactively bring up insurance topics unless the user shows interest first.
-            
+            For insurance-related conversations, follow this IMPORTANT PROCESS only AFTER the user brings up life insurance or health insurance:
+            1. NEVER ask for personal information from the user - all user details are already stored in their profile from onboarding
+            2. When the user asks about insurance, use ONLY their existing profile information - DO NOT ask for age, gender, health status, etc.
+            3. Provide the user's existing profile information to the "risk assessment" agent and the "premium calculation" agent
+            4. Provide the results to the "policy recommendation" agent to recommend the best policy
+            5. Ask the client to accept or decline the recommended policy
+            6. Follow up with the client after they make their decision
+
+            CRITICAL: NEVER ask the user for personal information like age, gender, smoking status, health conditions, etc.
+            This information is ALREADY in their profile from onboarding. Always use the existing profile data.
+
             For insurance conversations:
-            - Collect all necessary client information (age, gender, health status, smoking habits, etc.)
+            - ONLY use the client information already provided during onboarding
             - Help clients understand policy options (term life, whole life, etc.)
             - Explain coverage amounts and terms
-            - Process recommendations based on client risk profile
-            
+            - Process recommendations based on client risk profile from existing data
+
             Always refer to the user history to maintain context and continuity in the conversation.
-            Refer to the details provided by the user earlier in the conversation to maintain context and don't ask for the details always.
             Be conversational, professional, and concise in your responses.
-            You should mention the current stage of the process to the client only when engaged in insurance discussions.
             """
         )
-        
+
         self.conversation_history = {}  # Store conversation history by user ID
-        
-        # Create the graph
-        self.graph = self._create_graph()
-        
-        # Create a thread pool for parallel operations
+        self.graph = None  # Initialize graph lazily
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENCY)
-    
+
+        # Initialize the graph during construction
+        try:
+            print("Initializing graph during agent initialization...")
+            self.graph = self._create_graph()
+            print(f"Graph initialization {'successful' if self.graph else 'failed'}")
+        except Exception as e:
+            print(f"Error initializing graph during __init__: {str(e)}")
+            self.graph = None
+
     @property
     def risk_agent(self):
-        """Lazy initialization of risk agent"""
+        """Lazy initialization of risk agent."""
         if self._risk_agent is None:
-            print("Creating risk agent    mardav chtiya")
             self._risk_agent = RiskAssessmentAgent(self.llm_utility)
         return self._risk_agent
-    
+
     @property
     def premium_agent(self):
-        """Lazy initialization of premium agent"""
+        """Lazy initialization of premium agent."""
         if self._premium_agent is None:
             self._premium_agent = PremiumCalculationAgent(self.llm_utility)
         return self._premium_agent
-    
+
     @property
     def policy_agent(self):
-        """Lazy initialization of policy agent"""
+        """Lazy initialization of policy agent."""
         if self._policy_agent is None:
             self._policy_agent = PolicyRecommendationAgent(self.llm_utility, self.risk_agent, self.premium_agent)
         return self._policy_agent
-    
+
+    ### Node Functions Defined as Class Methods ###
+
+    def greeting_node(self, state: CommunicationState) -> CommunicationState:
+        """Handle the initial greeting or response to the user's first message."""
+        messages = state.get("messages", [])
+        if not messages:
+            return {
+                "messages": [HumanMessage(content="Hello! How can I assist you today?")],
+                "user_info": state.get("user_info", {}),
+                "policy_details": state.get("policy_details", {}),
+                "recommendation_result": state.get("recommendation_result", None),
+                "conversation_stage": "general_conversation",
+                "step_count": state.get("step_count", 0) + 1
+            }
+        last_message = messages[-1]
+        is_insurance_request = any(term in last_message.content.lower() for term in [
+            "suggest", "recommend", "insurance", "policy", "coverage",
+            "protection", "life insurance", "need policy", "want insurance",
+            "yes please", "yes", "recommend policy", "get started", "go ahead"
+        ])
+        llm_messages = [
+            self.system_message,
+            HumanMessage(content=f"""
+            The user has just started a conversation with: "{last_message.content}"
+
+            User information we have:
+            {state.get("user_info", {})}
+
+            Respond naturally to their message as a helpful AI assistant called Cora. Be conversational and friendly.
+
+            If they've mentioned insurance, policies, coverage, or said "yes" to recommendations,
+            acknowledge that you'll help with insurance recommendations using their existing profile information.
+
+            If the user hasn't mentioned insurance at all, just respond to their message naturally without bringing up
+            insurance topics. Be helpful about whatever subject they're discussing.
+
+            IMPORTANT: NEVER ask for personal information - we already have it from their onboarding profile.
+            If we don't have their profile information, DO NOT ask for it - just respond to their current message.
+            """)
+        ]
+        if not self.llm:
+            self.llm = self.llm_utility.get_llm()
+        response = self.llm.invoke(llm_messages)
+        next_stage = "collecting_info" if is_insurance_request else "general_conversation"
+        return {
+            "messages": messages + [response],
+            "user_info": state.get("user_info", {}),
+            "policy_details": state.get("policy_details", {}),
+            "recommendation_result": state.get("recommendation_result", None),
+            "conversation_stage": next_stage,
+            "step_count": state.get("step_count", 0) + 1
+        }
+
+    def collect_info_node(self, state: CommunicationState) -> CommunicationState:
+        """Load user information from profile and prepare for policy selection."""
+        last_message = state["messages"][-1]
+        user_info = state["user_info"] or {}
+        messages = [
+            self.system_message,
+            HumanMessage(content=f"""
+            The user is interested in life insurance policy recommendations.
+
+            User profile information we have:
+            {user_info}
+
+            IMPORTANT: DO NOT ask the user for ANY personal information. We already have their profile data.
+
+            If we have their profile information, acknowledge that you'll use it to provide personalized recommendations.
+            If we don't have their profile information, apologize and explain that you need their profile data to provide recommendations.
+
+            Ask ONLY about their insurance preferences (policy type, coverage amount) if needed.
+
+            User message: {last_message.content}
+            """)
+        ]
+        if not self.llm:
+            self.llm = self.llm_utility.get_llm()
+        response = self.llm.invoke(messages)
+        if "diet" in user_info and "health" not in user_info:
+            user_info["health"] = f"Diet: {user_info['diet']}"
+        required_fields = ["age", "gender", "smoking", "health"]
+        has_basic_info = all(key in user_info for key in required_fields)
+        next_stage = "policy_selection" if has_basic_info else "collecting_info"
+        return {
+            "messages": state["messages"] + [response],
+            "user_info": user_info,
+            "policy_details": state["policy_details"],
+            "recommendation_result": state["recommendation_result"],
+            "conversation_stage": next_stage,
+            "step_count": state.get("step_count", 0) + 1
+        }
+
+    def policy_selection_node(self, state: CommunicationState) -> CommunicationState:
+        """Help the user select a policy type and coverage amount."""
+        last_message = state["messages"][-1]
+        policy_details = state["policy_details"] or {}
+        messages = [
+            self.system_message,
+            HumanMessage(content=f"""
+            You are helping the user select a policy type and coverage amount.
+
+            User profile information:
+            {state["user_info"]}
+
+            Current policy preferences:
+            {policy_details}
+
+            Extract any policy preferences from the user's message and update our understanding.
+            If we have enough information (policy_type, coverage_amount), we'll proceed to generate recommendations.
+            If we don't have enough information, explain the different policy types (Term Life, Whole Life, Universal Life)
+            and ask about their coverage needs.
+
+            IMPORTANT: DO NOT ask for personal information like age, gender, health status, etc.
+            We already have this from their profile.
+
+            User message: {last_message.content}
+            """)
+        ]
+        if not self.llm:
+            self.llm = self.llm_utility.get_llm()
+        response = self.llm.invoke(messages)
+        has_policy_info = all(key in policy_details for key in ["policy_type", "coverage_amount"])
+        affirmative_responses = ["yes please", "yes", "sure", "ok", "okay", "go ahead"]
+        if any(term in last_message.content.lower() for term in affirmative_responses) and not has_policy_info:
+            policy_details["policy_type"] = "Term Life"
+            policy_details["coverage_amount"] = 2000000
+            policy_details["term_length"] = 20
+            has_policy_info = True
+        return {
+            "messages": state["messages"] + [response],
+            "user_info": state["user_info"],
+            "policy_details": policy_details,
+            "recommendation_result": state["recommendation_result"],
+            "conversation_stage": "recommendation" if has_policy_info else "policy_selection",
+            "step_count": state.get("step_count", 0) + 1
+        }
+
+    def recommendation_node(self, state: CommunicationState) -> CommunicationState:
+        """Generate policy recommendations using other agents."""
+        risk_assessment_result = self.risk_agent.invoke(state["user_info"])
+        premium_calculation_result = self.premium_agent.invoke(state["user_info"], risk_assessment_result, state["policy_details"])
+        policy_recommendation = self.policy_agent.invoke_with_results(state["user_info"], risk_assessment_result, premium_calculation_result)
+        recommendation_result = {
+            "risk_assessment": risk_assessment_result,
+            "premium_calculation": premium_calculation_result,
+            "policy_recommendation": policy_recommendation
+        }
+        messages = [
+            self.system_message,
+            HumanMessage(content=f"""
+            Based on the user's profile information and policy preferences, we have the following recommendation:
+
+            Risk Assessment:
+            - Risk Score: {recommendation_result["risk_assessment"].get("risk_score")}
+            - Risk Factors: {recommendation_result["risk_assessment"].get("risk_factors")}
+
+            Premium Calculation:
+            - Annual Premium: ${recommendation_result["premium_calculation"].get("annual_premium")}
+            - Monthly Premium: ${recommendation_result["premium_calculation"].get("monthly_premium")}
+
+            Policy Recommendation:
+            - Recommended Policy: {recommendation_result["policy_recommendation"]["recommended_policy"]["policy_type"]}
+            - Coverage Amount: ${recommendation_result["policy_recommendation"]["recommended_policy"]["coverage_amount"]}
+            - Term Length: {recommendation_result["policy_recommendation"]["recommended_policy"].get("term_length", "N/A")} years
+            - Premium: ${recommendation_result["policy_recommendation"]["recommended_policy"]["premium"]}
+
+            Respond to the user with this recommendation. Ask if they would like to accept this policy.
+            """)
+        ]
+        if not self.llm:
+            self.llm = self.llm_utility.get_llm()
+        response = self.llm.invoke(messages)
+        return {
+            "messages": state["messages"] + [response],
+            "user_info": state["user_info"],
+            "policy_details": state["policy_details"],
+            "recommendation_result": recommendation_result,
+            "conversation_stage": "policy_acceptance",
+            "step_count": state.get("step_count", 0) + 1
+        }
+
+    def policy_acceptance_node(self, state: CommunicationState) -> CommunicationState:
+        """Handle the user's acceptance or rejection of the recommended policy."""
+        last_message = state["messages"][-1]
+        message_lower = last_message.content.lower()
+        accepted = any(term in message_lower for term in ["accept", "i accept", "yes", "agree", "approved"])
+        declined = any(term in message_lower for term in ["decline", "i decline", "no", "reject", "don't want"])
+        if accepted:
+            content = f"""
+            The user has ACCEPTED the policy recommendation with this message: "{last_message.content}"
+
+            Thank them for accepting and explain next steps.
+            """
+        elif declined:
+            content = f"""
+            The user has DECLINED the policy recommendation with this message: "{last_message.content}"
+
+            Acknowledge their decision and offer alternatives.
+            """
+        else:
+            content = f"""
+            The user has responded but hasn't clearly accepted or declined: "{last_message.content}"
+
+            Ask for clarification if they accept or decline the policy.
+            """
+        messages = [
+            self.system_message,
+            HumanMessage(content=content)
+        ]
+        if not self.llm:
+            self.llm = self.llm_utility.get_llm()
+        response = self.llm.invoke(messages)
+        next_stage = "followup" if (accepted or declined) else "policy_acceptance"
+        return {
+            "messages": state["messages"] + [response],
+            "user_info": state["user_info"],
+            "policy_details": state["policy_details"],
+            "recommendation_result": state["recommendation_result"],
+            "conversation_stage": next_stage,
+            "step_count": state.get("step_count", 0) + 1
+        }
+
+    def followup_node(self, state: CommunicationState) -> CommunicationState:
+        """Follow up with the user after a decision."""
+        last_message = state["messages"][-1]
+        messages = [
+            self.system_message,
+            HumanMessage(content=f"""
+            The user has received our policy recommendation and has made a decision. We are now in the follow-up phase.
+
+            Respond to their question or comment about the policy.
+            Be conversational, helpful, and concise.
+
+            User message: {last_message.content}
+            """)
+        ]
+        if not self.llm:
+            self.llm = self.llm_utility.get_llm()
+        response = self.llm.invoke(messages)
+        is_complete = any(term in last_message.content.lower() for term in ["thank you", "goodbye", "bye", "thanks", "that's all"])
+        return {
+            "messages": state["messages"] + [response],
+            "user_info": state["user_info"],
+            "policy_details": state["policy_details"],
+            "recommendation_result": state["recommendation_result"],
+            "conversation_stage": "completed" if is_complete else "followup",
+            "step_count": state.get("step_count", 0) + 1
+        }
+
+    def general_conversation_node(self, state: CommunicationState) -> CommunicationState:
+        """Handle general conversation not related to insurance."""
+        last_message = state["messages"][-1]
+        messages = [
+            self.system_message,
+            HumanMessage(content=f"""
+            The user has sent a general message: "{last_message.content}"
+
+            User details we already have:
+            {state.get("user_info", {})}
+
+            Respond in a helpful, conversational manner.
+            If they ask about insurance, offer to help with recommendations.
+            Otherwise, just be helpful about whatever they're asking.
+
+            NEVER ask for personal information.
+            """)
+        ]
+        if not self.llm:
+            self.llm = self.llm_utility.get_llm()
+        response = self.llm.invoke(messages)
+        is_insurance_related = self._is_insurance_related(last_message.content)
+        next_stage = "collecting_info" if is_insurance_related else "general_conversation"
+        return {
+            "messages": state["messages"] + [response],
+            "user_info": state.get("user_info", {}),
+            "policy_details": state.get("policy_details", {}),
+            "recommendation_result": state["recommendation_result"],
+            "conversation_stage": next_stage,
+            "step_count": state.get("step_count", 0) + 1
+        }
+
+    def completed_node(self, state: CommunicationState) -> CommunicationState:
+        """Handle completed conversations."""
+        return state
+
+    ### Graph Creation ###
+
     def _create_graph(self) -> StateGraph:
         """
         Create the graph for the communication agent.
@@ -119,153 +406,104 @@ class CommunicationAgent:
         Returns:
             The compiled graph.
         """
-        # Define the nodes
-        def greeting(state: CommunicationState) -> CommunicationState:
-            """
-            Greet the user and engage in general conversation.
-            
-            Args:
-                state: The current state.
-                
-            Returns:
-                The updated state.
-            """
-            # Initial greeting - General conversation
-            print(f"Initial greeting - Starting general conversation")
-            
-            # Get the last user message
-            last_message = state["messages"][-1]
-            
-            # Create a message for the LLM
-            messages = [
-                self.system_message,
-                HumanMessage(content=f"""
-                The user has just started a conversation with: "{last_message.content}"
-                
-                Respond naturally to their message as a helpful AI assistant called Cora. Be conversational and friendly.
-                
-                If they've mentioned insurance, policies, coverage, or similar topics, 
-                you can acknowledge that you can help with insurance inquiries and can collect their information to provide 
-                personalized recommendations when they're ready.
-                
-                If the user hasn't mentioned insurance at all, just respond to their message naturally without bringing up 
-                insurance topics. Be helpful about whatever subject they're discussing.
-                
-                Do not proactively ask for personal information unless they've explicitly mentioned interest in insurance.
-                """)
-            ]
-            
-            # Get response from LLM
-            response = self.llm.invoke(messages)
-            
-            # Determine if we should move to collecting insurance info or stay in general conversation
-            is_insurance_related = self._is_insurance_related(last_message.content)
-            next_stage = "collecting_info" if is_insurance_related else "general_conversation"
-            
-            # Update the state
-            return {
-                "messages": state["messages"] + [response],
-                "user_info": state.get("user_info", {}),
-                "policy_details": state.get("policy_details", {}),
-                "recommendation_result": state["recommendation_result"],
-                "conversation_stage": next_stage,
-                "step_count": state.get("step_count", 0) + 1
-            }
-        
-        def collect_info(state: CommunicationState) -> CommunicationState:
-            """
-            Collect information from the user.
-            
-            Args:
-                state: The current state.
-                
-            Returns:
-                The updated state.
-            """
-            print(state)
-            # Step 1: Collect user information
-            print(f"Step 1: Collecting user information")
-            
-            # Get the last user message
-            last_message = state["messages"][-1]
-            
-            
-            # Extract user information from the message
-            user_info = state["user_info"] or {}
-            print(f"User info: {user_info}")
-            
-            # Check if this is the first time we're collecting info (transition from greeting)
-            is_first_time = state.get("step_count", 0) <= 1 or len(user_info) == 0
-            
-            # Create a message for the LLM
-            messages = [
-                self.system_message,
-                HumanMessage(content=f"""
-                You are collecting information from the user to provide a life insurance policy recommendation.
-                This is step 1 of our process - information collection.
-                
-                Current information we have:
-                {user_info}
-                
-                {"Since this is the first time the user has expressed interest in insurance, acknowledge their interest and explain that you'll need some information to provide personalized recommendations. Be conversational and friendly." if is_first_time else ""}
-                
-                Extract any new information from the user's message and update our understanding.
-                We need ALL of the following information before proceeding to step 2 (risk assessment):
-                - age (numeric)
-                - gender (male/female)
-                - smoking status (yes/no)
-                - health conditions (any major conditions)
-                
-                If we don't have ALL of this information, ask for the missing details specifically.
-                Be conversational but direct in your questions.
-                Remind the user that after collecting this information, we will assess their risk profile and calculate premium options.
-                
-                User message: {last_message.content}
-                
-                First, analyze what information we can extract from this message. Then respond to the user.
-                Format your analysis as JSON that we can use to update our user_info dictionary.
-                Even if the User has provided details in Json format, parse the Json and update the user_info dictionary.
-                Don't ask for the same information again and again.
+        try:
+            from langgraph.graph import StateGraph
+
+            # Define node functions
+            def greeting_node(state: CommunicationState) -> CommunicationState:
                 """
-                )
-            ]
-            
-            # Get response from LLM
-            response = self.llm.invoke(messages)
-            
-            # Try to extract structured information from the response
-            try:
-                import json
-                import re
+                Greet the user and engage in general conversation.
+                """
+                # Get the last user message
+                last_message = state["messages"][-1]
                 
-                # Look for JSON in the response
-                json_match = re.search(r'```json\n(.*?)\n```', response.content, re.DOTALL)
-                if json_match:
-                    extracted_info = json.loads(json_match.group(1))
-                    # Update user_info with extracted information
-                    user_info.update(extracted_info)
+                # Check if user is requesting insurance recommendations
+                is_insurance_request = any(term in last_message.content.lower() for term in [
+                    "suggest", "recommend", "insurance", "policy", "coverage", 
+                    "protection", "life insurance", "need policy", "want insurance",
+                    "yes please", "yes", "recommend policy", "get started", "go ahead"
+                ])
                 
-                # Determine if we have enough information to move to policy selection
-                # Require all essential fields
+                # Create a message for the LLM
+                messages = [
+                    self.system_message,
+                    HumanMessage(content=f"""
+                    The user has just started a conversation with: "{last_message.content}"
+                    
+                    User information we have:
+                    {state.get("user_info", {})}
+                    
+                    Respond naturally to their message as a helpful AI assistant called Cora. Be conversational and friendly.
+                    
+                    If they've mentioned insurance, policies, coverage, or said "yes" to recommendations,
+                    acknowledge that you'll help with insurance recommendations using their existing profile information.
+                    
+                    If the user hasn't mentioned insurance at all, just respond to their message naturally without bringing up 
+                    insurance topics. Be helpful about whatever subject they're discussing.
+                    
+                    IMPORTANT: NEVER ask for personal information - we already have it from their onboarding profile.
+                    If we don't have their profile information, DO NOT ask for it - just respond to their current message.
+                    """)
+                ]
+                
+                # Get response from LLM
+                if not self.llm:
+                    self.llm = self.llm_utility.get_llm()
+                response = self.llm.invoke(messages)
+                
+                # If the message indicates interest in insurance, move to collecting_info
+                next_stage = "collecting_info" if is_insurance_request else "general_conversation"
+                
+                # Update the state
+                return {
+                    "messages": state["messages"] + [response],
+                    "user_info": state.get("user_info", {}),
+                    "policy_details": state.get("policy_details", {}),
+                    "recommendation_result": state["recommendation_result"],
+                    "conversation_stage": next_stage,
+                    "step_count": state.get("step_count", 0) + 1
+                }
+                
+            def collect_info_node(state: CommunicationState) -> CommunicationState:
+                """
+                Load user information from profile and prepare for policy selection.
+                """
+                last_message = state["messages"][-1]
+                user_info = state["user_info"] or {}
+                
+                messages = [
+                    self.system_message,
+                    HumanMessage(content=f"""
+                    The user is interested in life insurance policy recommendations.
+                    
+                    User profile information we have:
+                    {user_info}
+                    
+                    IMPORTANT: DO NOT ask the user for ANY personal information. We already have their profile data.
+                    
+                    If we have their profile information, acknowledge that you'll use it to provide personalized recommendations.
+                    If we don't have their profile information, apologize and explain that you need their profile data to provide recommendations.
+                    
+                    Ask ONLY about their insurance preferences (policy type, coverage amount) if needed.
+                    
+                    User message: {last_message.content}
+                    """)
+                ]
+                
+                if not self.llm:
+                    self.llm = self.llm_utility.get_llm()
+                response = self.llm.invoke(messages)
+                
+                # Check if diet info exists but health doesn't
+                if "diet" in user_info and "health" not in user_info:
+                    user_info["health"] = f"Diet: {user_info['diet']}"
+                
+                # Check if all required fields are available
                 required_fields = ["age", "gender", "smoking", "health"]
                 has_basic_info = all(key in user_info for key in required_fields)
                 
-                # Additional validation - age should be numeric
-                if "age" in user_info and not isinstance(user_info["age"], (int, float)):
-                    try:
-                        user_info["age"] = int(user_info["age"])
-                    except (ValueError, TypeError):
-                        has_basic_info = False  # Invalid age format
-                
-                # Update the state
+                # Determine next stage
                 next_stage = "policy_selection" if has_basic_info else "collecting_info"
-                
-                # Debug logging
-                if has_basic_info:
-                    print(f"User {id(state)} has provided all required information. Moving to {next_stage}")
-                else:
-                    missing = [field for field in required_fields if field not in user_info]
-                    print(f"User {id(state)} is missing information: {missing}. Staying in collecting_info stage")
                 
                 return {
                     "messages": state["messages"] + [response],
@@ -275,84 +513,52 @@ class CommunicationAgent:
                     "conversation_stage": next_stage,
                     "step_count": state.get("step_count", 0) + 1
                 }
-            except Exception as e:
-                # If parsing fails, continue collecting information
-                print(f"Error parsing user information: {str(e)}")
-                return {
-                    "messages": state["messages"] + [response],
-                    "user_info": user_info,
-                    "policy_details": state["policy_details"],
-                    "recommendation_result": state["recommendation_result"],
-                    "conversation_stage": "collecting_info",
-                    "step_count": state.get("step_count", 0) + 1
-                }
-        
-        def policy_selection(state: CommunicationState) -> CommunicationState:
-            """
-            Help the user select a policy type and coverage amount.
-            
-            Args:
-                state: The current state.
                 
-            Returns:
-                The updated state.
-            """
-            # Step 1 (continued): Policy selection - still part of information collection
-            print(f"Step 1 (continued): Policy selection - collecting policy preferences")
-            
-            # Get the last user message
-            last_message = state["messages"][-1]
-            
-            # Extract policy details from the message
-            policy_details = state["policy_details"] or {}
-            
-            # Create a message for the LLM
-            messages = [
-                self.system_message,
-                HumanMessage(content=f"""
-                You are helping the user select a policy type and coverage amount.
-                This is still part of step 1 - collecting information, but focusing on policy preferences.
+            def policy_selection_node(state: CommunicationState) -> CommunicationState:
+                """
+                Help the user select a policy type and coverage amount.
+                """
+                last_message = state["messages"][-1]
+                policy_details = state["policy_details"] or {}
                 
-                Current user information:
-                {state["user_info"]}
+                messages = [
+                    self.system_message,
+                    HumanMessage(content=f"""
+                    You are helping the user select a policy type and coverage amount.
+                    
+                    User profile information:
+                    {state["user_info"]}
+                    
+                    Current policy preferences:
+                    {policy_details}
+                    
+                    Extract any policy preferences from the user's message and update our understanding.
+                    If we have enough information (policy_type, coverage_amount), we'll proceed to generate recommendations.
+                    If we don't have enough information, explain the different policy types (Term Life, Whole Life, Universal Life)
+                    and ask about their coverage needs.
+                    
+                    IMPORTANT: DO NOT ask for personal information like age, gender, health status, etc.
+                    We already have this from their profile.
+                    
+                    User message: {last_message.content}
+                    """)
+                ]
                 
-                Current policy details:
-                {policy_details}
+                if not self.llm:
+                    self.llm = self.llm_utility.get_llm()
+                response = self.llm.invoke(messages)
                 
-                Extract any policy preferences from the user's message and update our understanding.
-                If we have enough information (policy_type, coverage_amount), we'll proceed to step 2: risk assessment.
-                If we don't have enough information, explain the different policy types (Term Life, Whole Life, Universal Life)
-                and ask about their coverage needs.
-                
-                Be conversational but direct in your explanations and questions.
-                Remind the user that once we have this information, we will proceed to assess their risk and calculate premiums.
-                
-                User message: {last_message.content}
-                
-                First, analyze what policy information we can extract from this message. Then respond to the user.
-                Format your analysis as JSON that we can use to update our policy_details dictionary.
-                """)
-            ]
-            
-            # Get response from LLM
-            response = self.llm.invoke(messages)
-            
-            # Try to extract structured information from the response
-            try:
-                import json
-                import re
-                
-                # Look for JSON in the response
-                json_match = re.search(r'```json\n(.*?)\n```', response.content, re.DOTALL)
-                if json_match:
-                    extracted_info = json.loads(json_match.group(1))
-                    # Update policy_details with extracted information
-                    policy_details.update(extracted_info)
-                
-                # Determine if we have enough information to move to recommendation
+                # Check if we have enough policy information
                 has_policy_info = all(key in policy_details for key in ["policy_type", "coverage_amount"])
                 
-                # Update the state
+                # Handle affirmative responses
+                affirmative_responses = ["yes please", "yes", "sure", "ok", "okay", "go ahead"]
+                if any(term in last_message.content.lower() for term in affirmative_responses) and not has_policy_info:
+                    policy_details["policy_type"] = "Term Life"
+                    policy_details["coverage_amount"] = 2000000
+                    policy_details["term_length"] = 20
+                    has_policy_info = True
+                
                 return {
                     "messages": state["messages"] + [response],
                     "user_info": state["user_info"],
@@ -361,898 +567,265 @@ class CommunicationAgent:
                     "conversation_stage": "recommendation" if has_policy_info else "policy_selection",
                     "step_count": state.get("step_count", 0) + 1
                 }
-            except Exception as e:
-                # If parsing fails, continue policy selection
+                
+            def recommendation_node(state: CommunicationState) -> CommunicationState:
+                """
+                Generate policy recommendations using other agents.
+                """
+                # Get risk assessment
+                risk_assessment_result = self.risk_agent.invoke(state["user_info"])
+                
+                # Calculate premium
+                premium_calculation_result = self.premium_agent.invoke(
+                    state["user_info"], 
+                    risk_assessment_result, 
+                    state["policy_details"]
+                )
+                
+                # Get policy recommendation
+                policy_recommendation = self.policy_agent.invoke_with_results(
+                    state["user_info"], 
+                    risk_assessment_result, 
+                    premium_calculation_result
+                )
+                
+                # Compile recommendation results
+                recommendation_result = {
+                    "risk_assessment": risk_assessment_result,
+                    "premium_calculation": premium_calculation_result,
+                    "policy_recommendation": policy_recommendation
+                }
+                
+                # Create message for the LLM
+                messages = [
+                    self.system_message,
+                    HumanMessage(content=f"""
+                    Based on the user's profile information and policy preferences, we have the following recommendation:
+                    
+                    Risk Assessment:
+                    - Risk Score: {recommendation_result["risk_assessment"].get("risk_score")}
+                    - Risk Factors: {recommendation_result["risk_assessment"].get("risk_factors")}
+                    
+                    Premium Calculation:
+                    - Annual Premium: ${recommendation_result["premium_calculation"].get("annual_premium")}
+                    - Monthly Premium: ${recommendation_result["premium_calculation"].get("monthly_premium")}
+                    
+                    Policy Recommendation:
+                    - Recommended Policy: {recommendation_result["policy_recommendation"]["recommended_policy"]["policy_type"]}
+                    - Coverage Amount: ${recommendation_result["policy_recommendation"]["recommended_policy"]["coverage_amount"]}
+                    - Term Length: {recommendation_result["policy_recommendation"]["recommended_policy"].get("term_length", "N/A")} years
+                    - Premium: ${recommendation_result["policy_recommendation"]["recommended_policy"]["premium"]}
+                    
+                    Respond to the user with this recommendation. Ask if they would like to accept this policy.
+                    """)
+                ]
+                
+                if not self.llm:
+                    self.llm = self.llm_utility.get_llm()
+                response = self.llm.invoke(messages)
+                
                 return {
                     "messages": state["messages"] + [response],
                     "user_info": state["user_info"],
-                    "policy_details": policy_details,
-                    "recommendation_result": state["recommendation_result"],
-                    "conversation_stage": "policy_selection",
+                    "policy_details": state["policy_details"],
+                    "recommendation_result": recommendation_result,
+                    "conversation_stage": "policy_acceptance",
                     "step_count": state.get("step_count", 0) + 1
                 }
-        
-        def get_recommendation(state: CommunicationState) -> CommunicationState:
-            """
-            Get policy recommendations from the policy recommendation agent.
-            
-            Args:
-                state: The current state.
                 
-            Returns:
-                The updated state.
-            """
-            # Step 1: Get risk assessment from risk assessment agent
-            print(f"Step 1: Getting risk assessment from risk assessment agent")
-            risk_assessment_result = self.risk_agent.invoke(state["user_info"])
-            print(f"Risk assessment completed with score: {risk_assessment_result.get('risk_score')}")
-            
-            # Step 2: Get premium calculation from premium calculation agent
-            print(f"Step 2: Getting premium calculation from premium calculation agent")
-            premium_calculation_result = self.premium_agent.invoke(
-                state["user_info"], 
-                risk_assessment_result, 
-                state["policy_details"]
-            )
-            print(f"Premium calculation completed with annual premium: ${premium_calculation_result.get('annual_premium')}")
-            
-            # Step 3: Get policy recommendation from policy recommendation agent
-            print(f"Step 3: Getting policy recommendation from policy recommendation agent")
-            policy_recommendation = self.policy_agent.invoke_with_results(
-                state["user_info"],
-                risk_assessment_result,
-                premium_calculation_result
-            )
-            print(f"Policy recommendation completed with recommended policy: {policy_recommendation['recommended_policy']['policy_type']}")
-            
-            # Combine all results for the recommendation
-            recommendation_result = {
-                "risk_assessment": risk_assessment_result,
-                "premium_calculation": premium_calculation_result,
-                "policy_recommendation": policy_recommendation
-            }
-            
-            # Create a message for the LLM to format the recommendation
-            messages = [
-                self.system_message,
-                HumanMessage(content=f"""
-                Based on the user's information and policy preferences, we have the following recommendation:
+            def policy_acceptance_node(state: CommunicationState) -> CommunicationState:
+                """
+                Handle the user's acceptance or rejection of the recommended policy.
+                """
+                last_message = state["messages"][-1]
+                message_lower = last_message.content.lower()
                 
-                Risk Assessment:
-                - Risk Score: {recommendation_result["risk_assessment"].get("risk_score")}
-                - Risk Factors: {recommendation_result["risk_assessment"].get("risk_factors")}
+                # Check if the user has accepted or declined
+                accepted = any(term in message_lower for term in ["accept", "i accept", "yes", "agree", "approved"])
+                declined = any(term in message_lower for term in ["decline", "i decline", "no", "reject", "don't want"])
                 
-                Premium Calculation:
-                - Annual Premium: ${recommendation_result["premium_calculation"].get("annual_premium")}
-                - Monthly Premium: ${recommendation_result["premium_calculation"].get("monthly_premium")}
-                
-                Policy Recommendation:
-                - Recommended Policy: {recommendation_result["policy_recommendation"]["recommended_policy"]["policy_type"]}
-                - Coverage Amount: ${recommendation_result["policy_recommendation"]["recommended_policy"]["coverage_amount"]}
-                - Term Length: {recommendation_result["policy_recommendation"]["recommended_policy"].get("term_length", "N/A")} years
-                - Premium: ${recommendation_result["policy_recommendation"]["recommended_policy"]["premium"]}
-                - Recommended Riders: {recommendation_result["policy_recommendation"]["recommended_policy"]["recommended_riders"]}
-                
-                Alternative Policies:
-                {recommendation_result["policy_recommendation"]["alternative_policies"]}
-                
-                Explanation:
-                {recommendation_result["policy_recommendation"]["explanation"]}
-                
-                Respond to the user by summarizing this recommendation in a clear, friendly, and professional manner.
-                Address the user by name if available.
-                Explain the recommendation and why it's suitable based on their risk profile and needs.
-                Ask if they have any questions or if they'd like to proceed with the recommended policy.
-                Mention that we are moving to the follow-up phase to address any questions they might have.
-                """)
-            ]
-            
-            # Get response from LLM
-            response = self.llm.invoke(messages)
-            
-            # Update the state
-            return {
-                "messages": state["messages"] + [response],
-                "user_info": state["user_info"],
-                "policy_details": state["policy_details"],
-                "recommendation_result": recommendation_result,
-                "conversation_stage": "followup",
-                "step_count": state.get("step_count", 0) + 1
-            }
-        
-        def followup(state: CommunicationState) -> CommunicationState:
-            """
-            Follow up with the user after providing recommendations.
-            
-            Args:
-                state: The current state.
-                
-            Returns:
-                The updated state.
-            """
-            # Step 4: Follow up with the client
-            print(f"Step 4: Following up with the client")
-            
-            # Get the last user message
-            last_message = state["messages"][-1]
-            
-            # Create a message for the LLM
-            messages = [
-                self.system_message,
-                HumanMessage(content=f"""
-                The user has received our policy recommendation. We are now in the follow-up phase.
-                
-                Respond to their follow-up question or comment.
-                
-                If they want to proceed with the policy, explain the next steps (e.g., application process, medical exam if needed).
-                If they have questions about the recommendation, answer them based on the information we have.
-                If they want to explore other options, suggest alternatives from our recommendation.
-                
-                Be conversational, helpful, and concise in your response.
-                Remind them that this is the follow-up phase of our conversation where we address their questions and concerns.
-                
-                User message: {last_message.content}
-                
-                Our recommendation details:
-                {state["recommendation_result"]}
-                """)
-            ]
-            
-            # Get response from LLM
-            response = self.llm.invoke(messages)
-            
-            # Check if the conversation is complete
-            is_complete = "thank you" in last_message.content.lower() or "goodbye" in last_message.content.lower()
-            
-            # Update the state
-            if is_complete:
-                print(f"Step 5: Conversation completed")
-                completion_message = "Thank you for using our service. Your conversation is now complete."
-            else:
-                completion_message = ""
-                
-            return {
-                "messages": state["messages"] + [response],
-                "user_info": state["user_info"],
-                "policy_details": state["policy_details"],
-                "recommendation_result": state["recommendation_result"],
-                "conversation_stage": "completed" if is_complete else "followup",
-                "step_count": state.get("step_count", 0) + 1
-            }
-        
-        def general_conversation(state: CommunicationState) -> CommunicationState:
-            """
-            Handle general conversation with the user that isn't related to insurance.
-            
-            Args:
-                state: The current state.
-                
-            Returns:
-                The updated state.
-            """
-            print(f"General conversation - responding to user query")
-            
-            # Get the last user message
-            last_message = state["messages"][-1]
-            
-            # Check if this is an educational question about insurance rather than a request for personal coverage
-            is_insurance_education = any(pattern in last_message.content.lower() for pattern in [
-                "what is life insurance", "what is insurance", "what is a policy", 
-                "how does life insurance work", "explain life insurance", "tell me about life insurance",
-                "types of insurance", "types of life insurance", "different policies",
-                "difference between", "explain the difference", "what's the difference",
-                "no, just tell me", "just explain"
-            ])
-            
-            # Create a message for the LLM
-            if is_insurance_education:
-                messages = [
-                    SystemMessage(content="""You are Cora, a knowledgeable AI assistant specializing in insurance topics.
-                    Provide educational, informative responses about insurance concepts.
-                    Focus on explaining the topic clearly without asking for personal information.
-                    Be helpful, concise, and informative. Don't try to collect user details or promote specific policies.
-                    """),
-                    HumanMessage(content=f"""
-                    The user has asked an educational question about insurance: "{last_message.content}"
+                # Create content for LLM based on user response
+                if accepted:
+                    content = f"""
+                    The user has ACCEPTED the policy recommendation with this message: "{last_message.content}"
                     
-                    Provide a helpful, educational explanation about the requested insurance topic.
-                    Focus on being informative and educational rather than trying to sell a policy.
-                    Don't ask for personal information - just explain the concept they're asking about.
+                    Thank them for accepting and explain next steps.
+                    """
+                elif declined:
+                    content = f"""
+                    The user has DECLINED the policy recommendation with this message: "{last_message.content}"
                     
-                    After explaining, you can mention that if they're interested in personalized recommendations later,
-                    you'd be happy to help, but don't pressure them for information.
-                    """)
-                ]
-            else:
-                messages = [
-                    SystemMessage(content="""You are Cora, a helpful AI assistant who can discuss a wide range of topics.
-                    
-                    Respond knowledgeably and helpfully to questions about:
-                    - Technology and science
-                    - Entertainment and culture
-                    - News and current events
-                    - Personal advice and guidance
-                    - Health and wellness (general topics)
-                    - Finance and economics (general information)
-                    - History, geography, and general knowledge
-                    
-                    If the user mentions anything related to insurance, health insurance, life policies, coverage, or financial protection, 
-                    acknowledge their interest and indicate you can help with life insurance recommendations by collecting some information.
-                    
-                    Otherwise, be helpful, friendly, and informative about whatever topic they're discussing.
-                    Keep your responses concise, engaging, and tailored to their specific query.
-                    
-                    Don't proactively bring up insurance unless the user expresses interest first.
-                    """),
-                    HumanMessage(content=f"User message: {last_message.content}")
-                ]
-            
-            # Get response from LLM
-            response = self.llm.invoke(messages)
-            
-            # For educational questions about insurance, don't transition to insurance info collection
-            if is_insurance_education:
-                next_stage = "general_conversation"
-            else:
-                # Check if the response mentions insurance (in case the user's message was actually insurance-related)
-                is_insurance_related = self._is_insurance_related(last_message.content) and not is_insurance_education
-                is_insurance_request = is_insurance_related and any(term in last_message.content.lower() for term in [
-                    "need insurance", "want insurance", "get insurance", "buy insurance", 
-                    "recommend", "looking for", "need coverage", "want coverage",
-                    "need policy", "want policy", "quotes", "rates", "plans for me"
-                ])
-                
-                # Only transition to collecting info if they're asking for personal coverage, not just information
-                next_stage = "collecting_info" if is_insurance_request else "general_conversation"
-            
-            return {
-                "messages": state["messages"] + [response],
-                "user_info": state.get("user_info", {}),
-                "policy_details": state.get("policy_details", {}),
-                "recommendation_result": state["recommendation_result"],
-                "conversation_stage": next_stage,
-                "step_count": state.get("step_count", 0) + 1
-            }
-            
-        def router(state: CommunicationState) -> Union[CommunicationState, str]:
-            """
-            Route the conversation to the appropriate stage.
-            
-            Args:
-                state: The current state.
-                
-            Returns:
-                The updated state or "END" to end the conversation.
-            """
-            # End the conversation if we've gone too many steps
-            if state.get("step_count", 0) > 20:
-                print(f"Hit maximum number of steps, ending conversation")
-                return "END"
-            
-            # Get the last user message if available
-            last_message = state["messages"][-1] if state["messages"] else None
-            
-            # Check if this is an educational question about insurance
-            is_insurance_education = last_message and any(pattern in last_message.content.lower() for pattern in [
-                "what is life insurance", "what is insurance", "what is a policy", 
-                "how does life insurance work", "explain life insurance", "tell me about life insurance",
-                "types of insurance", "types of life insurance", "different policies",
-                "difference between", "explain the difference", "what's the difference",
-                "no, just tell me", "just explain"
-            ])
-            
-            # Check if we need to transition from general conversation to insurance
-            if state["conversation_stage"] == "greeting" or state["conversation_stage"] == "general_conversation":
-                if last_message:
-                    # Is it actually requesting personal insurance rather than just education about insurance?
-                    is_insurance_related = self._is_insurance_related(last_message.content) and not is_insurance_education
-                    is_insurance_request = is_insurance_related and any(term in last_message.content.lower() for term in [
-                        "need insurance", "want insurance", "get insurance", "buy insurance", 
-                        "recommend", "looking for", "need coverage", "want coverage",
-                        "need policy", "want policy", "quotes", "rates", "plans for me"
-                    ])
-                    
-                    if is_insurance_request:
-                        print(f"User requested personal insurance, transitioning to collecting info")
-                        state["conversation_stage"] = "collecting_info"
-                        return collect_info(state)
-                    elif is_insurance_education:
-                        print(f"User asked educational question about insurance, staying in general conversation")
-                        return general_conversation(state)
-                    else:
-                        print(f"User did not mention insurance or asked general question, continuing general conversation")
-                        return general_conversation(state)
-            
-            # Check if we can transition to recommendation
-            if (state["conversation_stage"] == "policy_selection" and
-                state["user_info"] and len(state["user_info"]) >= 4 and
-                state["policy_details"] and len(state["policy_details"]) >= 2):
-                print(f"User has provided all required information. Starting recommendation")
-                return get_recommendation(state)
-            
-            # New conversations should not skip stages
-            if state["conversation_stage"] == "greeting" and len(state["messages"]) <= 2:
-                return greeting(state)
-                
-            # Route based on the current stage
-            if state["conversation_stage"] == "greeting":
-                return greeting(state)
-            elif state["conversation_stage"] == "general_conversation":
-                return general_conversation(state)
-            elif state["conversation_stage"] == "collecting_info":
-                return collect_info(state)
-            elif state["conversation_stage"] == "policy_selection":
-                return policy_selection(state)
-            elif state["conversation_stage"] == "recommendation":
-                return followup(state)
-            elif state["conversation_stage"] == "followup":
-                return followup(state)
-            else:
-                print(f"Unknown stage: {state['conversation_stage']}")
-                return greeting(state)
-        
-        # Create the graph
-        builder = StateGraph(CommunicationState)
-        
-        # Add nodes
-        builder.add_node("greeting", greeting)
-        builder.add_node("collecting_info", collect_info)
-        builder.add_node("policy_selection", policy_selection)
-        builder.add_node("recommendation", get_recommendation)
-        builder.add_node("followup", followup)
-        builder.add_node("general_conversation", general_conversation)
-        
-        # Set the entry point
-        builder.set_entry_point("greeting")
-        
-        # Add conditional edges
-        builder.add_conditional_edges(
-            "greeting",
-            router,
-            {
-                "greeting": "greeting",
-                "general_conversation": "general_conversation",
-                "collecting_info": "collecting_info",
-                "policy_selection": "policy_selection",
-                "recommendation": "recommendation",
-                "followup": "followup",
-                "completed": END
-            }
-        )
-        
-        builder.add_conditional_edges(
-            "general_conversation",
-            router,
-            {
-                "greeting": "greeting",
-                "general_conversation": "general_conversation",
-                "collecting_info": "collecting_info",
-                "policy_selection": "policy_selection",
-                "recommendation": "recommendation",
-                "followup": "followup",
-                "completed": END
-            }
-        )
-        
-        builder.add_conditional_edges(
-            "collecting_info",
-            router,
-            {
-                "greeting": "greeting",
-                "general_conversation": "general_conversation",
-                "collecting_info": "collecting_info",
-                "policy_selection": "policy_selection",
-                "recommendation": "recommendation",
-                "followup": "followup",
-                "completed": END
-            }
-        )
-        
-        builder.add_conditional_edges(
-            "policy_selection",
-            router,
-            {
-                "greeting": "greeting",
-                "general_conversation": "general_conversation",
-                "collecting_info": "collecting_info",
-                "policy_selection": "policy_selection",
-                "recommendation": "recommendation",
-                "followup": "followup",
-                "completed": END
-            }
-        )
-        
-        builder.add_conditional_edges(
-            "recommendation",
-            router,
-            {
-                "greeting": "greeting",
-                "general_conversation": "general_conversation",
-                "collecting_info": "collecting_info",
-                "policy_selection": "policy_selection",
-                "recommendation": "recommendation",
-                "followup": "followup",
-                "completed": END
-            }
-        )
-        
-        builder.add_conditional_edges(
-            "followup",
-            router,
-            {
-                "greeting": "greeting",
-                "general_conversation": "general_conversation",
-                "collecting_info": "collecting_info",
-                "policy_selection": "policy_selection",
-                "recommendation": "recommendation",
-                "followup": "followup",
-                "completed": END
-            }
-        )
-        
-        # Compile the graph with optimized settings
-        return builder.compile()
-    
-    def _process_json_input(self, message: str, user_id: str) -> bool:
-        """
-        Process JSON input from the user and update user_info and policy_details accordingly.
-        
-        Args:
-            message: The user message that might contain JSON.
-            user_id: The user ID.
-            
-        Returns:
-            True if JSON was successfully processed, False otherwise.
-        """
-        try:
-            import json
-            import re
-            
-            # Check if the message contains JSON
-            json_match = re.search(r'({.*})', message, re.DOTALL)
-            if json_match:
-                data = json.loads(json_match.group(1))
-                
-                # Map the JSON fields to our internal user_info structure
-                user_info = self.conversation_history[user_id]["user_info"]
-                
-                # Basic user information
-                if "name" in data:
-                    user_info["name"] = data["name"]
-                if "age" in data:
-                    try:
-                        user_info["age"] = int(data["age"])
-                    except (ValueError, TypeError):
-                        user_info["age"] = data["age"]
-                if "gender" in data:
-                    user_info["gender"] = data["gender"]
-                if "smoker" in data:
-                    user_info["smoking"] = "yes" if data["smoker"] == "Yes" else "no"
-                if "email" in data:
-                    user_info["email"] = data["email"]
-                if "phone" in data:
-                    user_info["phone"] = data["phone"]
-                
-                # Health information
-                health_issues = []
-                if data.get("preExistingConditions") == "Yes":
-                    health_issues.append("Has pre-existing conditions")
-                if data.get("familyHistory") == "Yes":
-                    health_issues.append("Has family history of serious illnesses")
-                
-                if health_issues:
-                    user_info["health"] = ", ".join(health_issues)
+                    Acknowledge their decision and offer alternatives.
+                    """
                 else:
-                    user_info["health"] = "No significant health issues reported"
-                
-                # Additional user information
-                if "occupation" in data:
-                    user_info["occupation"] = data["occupation"]
-                if "income" in data:
-                    user_info["income"] = data["income"]
-                if "maritalStatus" in data:
-                    user_info["marital_status"] = data["maritalStatus"]
-                if "height" in data and "weight" in data:
-                    user_info["height"] = data["height"]
-                    user_info["weight"] = data["weight"]
-                if "alcoholConsumption" in data:
-                    user_info["alcohol"] = data["alcoholConsumption"]
-                if "exerciseFrequency" in data:
-                    user_info["exercise"] = data["exerciseFrequency"]
-                if "riskyHobbies" in data:
-                    user_info["risky_hobbies"] = data["riskyHobbies"]
-                
-                # Policy details
-                policy_details = self.conversation_history[user_id]["policy_details"]
-                
-                if "coverageAmount" in data:
-                    policy_details["coverage_amount"] = data["coverageAmount"]
-                if "policyTerm" in data:
-                    policy_details["term_length"] = data["policyTerm"]
-                if "paymentFrequency" in data:
-                    policy_details["payment_frequency"] = data["paymentFrequency"]
-                if "riders" in data:
-                    policy_details["riders"] = data["riders"]
-                
-                # Try to determine policy type (if specific policy type was mentioned)
-                if "policyType" in data:
-                    policy_details["policy_type"] = data["policyType"]
-                else:
-                    # Default to Term Life if not specified but we have term length
-                    if "policyTerm" in data:
-                        policy_details["policy_type"] = "Term Life Insurance"
-                        policy_details["term_length"] = data["policyTerm"]
-                
-                # Ensure we set term_length from policyTerm if available
-                if "policyTerm" in data and "term_length" not in policy_details:
-                    policy_details["term_length"] = data["policyTerm"]
-                
-                # Determine if we have enough information to proceed to recommendation
-                required_user_fields = ["age", "gender", "smoking", "health"]
-                required_policy_fields = ["coverage_amount", "policy_type"]
-                
-                has_user_info = all(field in user_info for field in required_user_fields)
-                has_policy_info = all(field in policy_details for field in required_policy_fields)
-                
-                if has_user_info and has_policy_info:
-                    # If we have all required information, update the conversation stage
-                    self.conversation_history[user_id]["conversation_stage"] = "recommendation"
-                    return True
-                elif has_user_info:
-                    # If we have user info but not policy info
-                    self.conversation_history[user_id]["conversation_stage"] = "policy_selection"
-                    return True
-                elif any(field in user_info for field in required_user_fields):
-                    # If we have some but not all user info
-                    self.conversation_history[user_id]["conversation_stage"] = "collecting_info"
-                    return True
-            
-            return False
-        except Exception as e:
-            print(f"Error processing JSON input: {str(e)}")
-            return False
-            
-    async def invoke_async(self, message: str, user_id: str = "default_user", user_details: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Asynchronously invoke the communication agent with a user message.
-        
-        Args:
-            message: The user message.
-            user_id: The user ID.
-            user_details: Optional user details from the frontend onboarding form.
-            
-        Returns:
-            The response from the agent.
-        """
-        # Get or initialize conversation history
-        if user_id not in self.conversation_history:
-            print(f"Initializing new conversation for user {user_id}")
-            self.conversation_history[user_id] = {
-                "messages": [self.system_message],
-                "user_info": {},  # Initialize as empty dict instead of None
-                "policy_details": {},  # Initialize as empty dict instead of None
-                "recommendation_result": None,
-                "conversation_stage": "greeting",
-                "step_count": 0  # Initialize step count
-            }
-            
-            # First try to load user data from the Users folder
-            loaded_user_data = self._load_user_data(user_id)
-            if loaded_user_data:
-                print(f"Loaded user data from Users folder for user {user_id}")
-                user_info = self.conversation_history[user_id]["user_info"]
-                
-                # Map fields from stored user data to our internal structure
-                if "age" in loaded_user_data:
-                    try:
-                        user_info["age"] = int(loaded_user_data["age"])
-                    except (ValueError, TypeError):
-                        user_info["age"] = loaded_user_data["age"]
-                
-                if "gender" in loaded_user_data:
-                    user_info["gender"] = loaded_user_data["gender"]
+                    content = f"""
+                    The user has responded but hasn't clearly accepted or declined: "{last_message.content}"
                     
-                if "name" in loaded_user_data:
-                    user_info["name"] = loaded_user_data["name"]
+                    Ask for clarification if they accept or decline the policy.
+                    """
                 
-                if "smoker" in loaded_user_data:
-                    user_info["smoking"] = "yes" if loaded_user_data["smoker"] == "Yes" else "no"
+                messages = [
+                    self.system_message,
+                    HumanMessage(content=content)
+                ]
                 
-                if "preExistingConditions" in loaded_user_data or "familyHistory" in loaded_user_data:
-                    health_conditions = []
-                    if loaded_user_data.get("preExistingConditions") == "Yes":
-                        health_conditions.append("Has pre-existing conditions")
-                    if loaded_user_data.get("familyHistory") == "Yes":
-                        health_conditions.append("Has family history of serious illnesses")
-                    
-                    if health_conditions:
-                        user_info["health"] = ", ".join(health_conditions)
+                if not self.llm:
+                    self.llm = self.llm_utility.get_llm()
+                response = self.llm.invoke(messages)
                 
-                # Add more fields as needed
-                if "income" in loaded_user_data:
-                    user_info["income"] = loaded_user_data["income"]
-                
-                if "maritalStatus" in loaded_user_data:
-                    user_info["marital_status"] = loaded_user_data["maritalStatus"]
-                
-                if "occupation" in loaded_user_data:
-                    user_info["occupation"] = loaded_user_data["occupation"]
-            
-            # If user details are provided from the frontend, incorporate them
-            if user_details:
-                print(f"Incorporating user details from frontend for user {user_id}")
-                user_info = self.conversation_history[user_id]["user_info"]
-                policy_details = self.conversation_history[user_id]["policy_details"]
-                
-                # Map frontend fields to our internal user_info structure
-                if "age" in user_details:
-                    try:
-                        user_info["age"] = int(user_details["age"])
-                    except (ValueError, TypeError):
-                        user_info["age"] = user_details["age"]
-                
-                if "gender" in user_details:
-                    user_info["gender"] = user_details["gender"]
-                
-                if "smoker" in user_details:
-                    user_info["smoking"] = "yes" if user_details["smoker"] == "Yes" else "no"
-                
-                if "preExistingConditions" in user_details or "familyHistory" in user_details:
-                    health_conditions = []
-                    if user_details.get("preExistingConditions") == "Yes":
-                        health_conditions.append("Has pre-existing conditions")
-                    if user_details.get("familyHistory") == "Yes":
-                        health_conditions.append("Has family history of serious illnesses")
-                    
-                    if health_conditions:
-                        user_info["health"] = ", ".join(health_conditions)
-                
-                # Additional information that might be useful for personalization
-                if "name" in user_details:
-                    user_info["name"] = user_details["name"]
-                
-                if "income" in user_details:
-                    user_info["income"] = user_details["income"]
-                
-                if "occupation" in user_details:
-                    user_info["occupation"] = user_details["occupation"]
-                
-                if "email" in user_details:
-                    user_info["email"] = user_details["email"]
-                
-                if "phone" in user_details:
-                    user_info["phone"] = user_details["phone"]
-                
-                # Policy details
-                if "coverageAmount" in user_details:
-                    policy_details["coverage_amount"] = user_details["coverageAmount"]
-                
-                if "policyTerm" in user_details:
-                    policy_details["term_length"] = user_details["policyTerm"]
-                    # Default to Term Life if we have term length
-                    policy_details["policy_type"] = "Term Life Insurance"
-                
-                if "paymentFrequency" in user_details:
-                    policy_details["payment_frequency"] = user_details["paymentFrequency"]
-                
-                if "riders" in user_details:
-                    policy_details["riders"] = user_details["riders"]
-                
-                # Check if we have all required information to start with recommendations
-                required_user_fields = ["age", "gender", "smoking", "health"]
-                required_policy_fields = ["coverage_amount", "policy_type"]
-                
-                has_user_info = all(field in user_info for field in required_user_fields)
-                has_policy_info = all(field in policy_details for field in required_policy_fields)
-                
-                if has_user_info and has_policy_info:
-                    # If we have all required information, set the conversation stage to recommendation
-                    self.conversation_history[user_id]["conversation_stage"] = "recommendation"
-                    print(f"Complete user_details provided. Setting stage to recommendation for user {user_id}")
-                
-                # Log the collected information
-                print(f"User info collected from frontend: {user_info}")
-                print(f"Policy details collected from frontend: {policy_details}")
-        
-        # Process JSON input if provided
-        json_processed = self._process_json_input(message, user_id)
-        
-        # Add user message to history
-        user_message = HumanMessage(content=message)
-        self.conversation_history[user_id]["messages"].append(user_message)
-        
-        # Debug: Print current conversation stage
-        print(f"Before async graph execution - User: {user_id}, Stage: {self.conversation_history[user_id]['conversation_stage']}")
-        
-        # Check if we have all required information to skip directly to recommendations
-        user_info = self.conversation_history[user_id]["user_info"]
-        policy_details = self.conversation_history[user_id]["policy_details"]
-        
-        required_user_fields = ["age", "gender", "smoking", "health"]
-        required_policy_fields = ["coverage_amount", "policy_type"]
-        
-        has_user_info = all(field in user_info for field in required_user_fields)
-        has_policy_info = all(field in policy_details for field in required_policy_fields)
-        
-        # If we are in recommendation stage or have complete info, generate recommendation directly
-        if self.conversation_history[user_id]["conversation_stage"] == "recommendation" or (has_user_info and has_policy_info):
-            print(f"Complete info available. Generating recommendation for user {user_id}")
-            
-            try:
-                # Directly run the recommendation node
-                state = self.conversation_history[user_id]
-                # Run in executor to avoid blocking
-                loop = asyncio.get_event_loop()
-                updated_state = await loop.run_in_executor(
-                    self.executor,
-                    lambda: self._direct_recommendation(state)
-                )
-                self.conversation_history[user_id] = updated_state
-                
-                # Return the last AI message
-                for msg in reversed(updated_state["messages"]):
-                    if isinstance(msg, AIMessage):
-                        return {
-                            "response": msg.content,
-                            "conversation_stage": "followup"
-                        }
-            except Exception as e:
-                print(f"Error generating direct recommendation: {str(e)}")
-                # Continue with normal flow if direct recommendation fails
-        
-        # Check if this is a general question that needs a quick response
-        is_general_question = self._is_general_question(message)
-        
-        # For general questions, provide a quick response without running the full graph
-        if is_general_question and self.conversation_history[user_id]["step_count"] <= 1:
-            try:
-                # Generate a quick response directly
-                quick_response = await self._generate_quick_response(message, user_id)
-                
-                # Update conversation history
-                self.conversation_history[user_id]["messages"].append(quick_response)
-                self.conversation_history[user_id]["step_count"] += 1
+                # Determine next stage
+                next_stage = "followup" if (accepted or declined) else "policy_acceptance"
                 
                 return {
-                    "response": quick_response.content,
-                    "conversation_stage": "collecting_info"
+                    "messages": state["messages"] + [response],
+                    "user_info": state["user_info"],
+                    "policy_details": state["policy_details"],
+                    "recommendation_result": state["recommendation_result"],
+                    "conversation_stage": next_stage,
+                    "step_count": state.get("step_count", 0) + 1
                 }
-            except Exception as e:
-                print(f"Error generating quick response: {str(e)}")
-                # Continue with normal flow if quick response fails
-        
-        try:
-            # Run the graph with increased recursion limit and optimized settings
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                self.executor,
-                lambda: self.graph.invoke(
-                    self.conversation_history[user_id],
-                    {
-                        "recursion_limit": 50,  # Increase recursion limit from default 25 to 50
-                        "max_concurrency": MAX_CONCURRENCY  # Limit concurrent operations
-                    }
-                )
-            )
-            
-            # Debug: Print resulting conversation stage
-            print(f"After async graph execution - User: {user_id}, Stage: {result['conversation_stage']}")
-            
-            # Ensure proper conversation flow - don't skip stages for new conversations
-            if (self.conversation_history[user_id]["step_count"] <= 1 and 
-                result["conversation_stage"] not in ["greeting", "general_conversation", "collecting_info"] and
-                not json_processed):  # Skip this check if JSON was successfully processed
-                print(f"Warning: Conversation jumped to {result['conversation_stage']} too quickly. Resetting to collecting_info.")
-                result["conversation_stage"] = "collecting_info"
                 
-                # Force a proper greeting/info collection response
-                for msg in reversed(result["messages"]):
-                    if isinstance(msg, AIMessage):
-                        # Replace the last AI message with a proper greeting
-                        greeting_msg = self.llm.invoke([
-                            self.system_message,
-                            HumanMessage(content=f"""
-                            The user has just started a conversation with the message: "{message}"
-                            
-                            User details we already have:
-                            {self.conversation_history[user_id]["user_info"]}
-                            
-                            Greet them warmly by name if available, and explain that you'll help them find the right life insurance policy.
-                            If we're missing any essential information (age, gender, smoking status, health), ask for it.
-                            If we have all the essential information, ask about their insurance needs and preferences.
-                            Be conversational and friendly, but get straight to the point.
-                            DO NOT provide any policy recommendations yet unless we have all required information.
-                            """)
-                        ])
-                        
-                        # Replace the last message
-                        result["messages"] = list(result["messages"])
-                        result["messages"][-1] = greeting_msg
-                        break
+            def followup_node(state: CommunicationState) -> CommunicationState:
+                """
+                Follow up with the user after a decision.
+                """
+                last_message = state["messages"][-1]
+                
+                messages = [
+                    self.system_message,
+                    HumanMessage(content=f"""
+                    The user has received our policy recommendation and has made a decision. We are now in the follow-up phase.
+                    
+                    Respond to their question or comment about the policy.
+                    Be conversational, helpful, and concise.
+                    
+                    User message: {last_message.content}
+                    """)
+                ]
+                
+                if not self.llm:
+                    self.llm = self.llm_utility.get_llm()
+                response = self.llm.invoke(messages)
+                
+                # Check if the conversation is complete
+                is_complete = any(term in last_message.content.lower() for term in ["thank you", "goodbye", "bye", "thanks", "that's all"])
+                
+                return {
+                    "messages": state["messages"] + [response],
+                    "user_info": state["user_info"],
+                    "policy_details": state["policy_details"],
+                    "recommendation_result": state["recommendation_result"],
+                    "conversation_stage": "completed" if is_complete else "followup",
+                    "step_count": state.get("step_count", 0) + 1
+                }
+                
+            def general_conversation_node(state: CommunicationState) -> CommunicationState:
+                """
+                Handle general conversation not related to insurance.
+                """
+                last_message = state["messages"][-1]
+                
+                messages = [
+                    self.system_message,
+                    HumanMessage(content=f"""
+                    The user has sent a general message: "{last_message.content}"
+                    
+                    User details we already have:
+                    {state.get("user_info", {})}
+                    
+                    Respond in a helpful, conversational manner.
+                    If they ask about insurance, offer to help with recommendations.
+                    Otherwise, just be helpful about whatever they're asking.
+                    
+                    NEVER ask for personal information.
+                    """)
+                ]
+                
+                if not self.llm:
+                    self.llm = self.llm_utility.get_llm()
+                response = self.llm.invoke(messages)
+                
+                # Check if the message is insurance related
+                is_insurance_related = self._is_insurance_related(last_message.content)
+                next_stage = "collecting_info" if is_insurance_related else "general_conversation"
+                
+                return {
+                    "messages": state["messages"] + [response],
+                    "user_info": state.get("user_info", {}),
+                    "policy_details": state.get("policy_details", {}),
+                    "recommendation_result": state["recommendation_result"],
+                    "conversation_stage": next_stage,
+                    "step_count": state.get("step_count", 0) + 1
+                }
+                
+            def completed_node(state: CommunicationState) -> CommunicationState:
+                """
+                Handle completed conversations.
+                """
+                return state
+
+            # Create the graph
+            workflow = StateGraph(CommunicationState)
             
-            # Update conversation history
-            self.conversation_history[user_id] = result
+            # Add all the nodes
+            workflow.add_node("greeting", greeting_node)
+            workflow.add_node("collecting_info", collect_info_node)
+            workflow.add_node("policy_selection", policy_selection_node)
+            workflow.add_node("recommendation", recommendation_node)
+            workflow.add_node("policy_acceptance", policy_acceptance_node)
+            workflow.add_node("followup", followup_node)
+            workflow.add_node("general_conversation", general_conversation_node)
+            workflow.add_node("completed", completed_node)
             
-            # Return the last AI message
-            for msg in reversed(result["messages"]):
-                if isinstance(msg, AIMessage):
-                    return {
-                        "response": msg.content,
-                        "conversation_stage": result["conversation_stage"]
-                    }
+            # Define the edges
+            # Set the entry point for the workflow
+            workflow.set_entry_point("greeting")
             
-            # Fallback if no AI message is found
-            return {
-                "response": "I'm sorry, I couldn't process your request. Please try again.",
-                "conversation_stage": result["conversation_stage"]
-            }
+            # Define the edges
+            workflow.add_edge("greeting", "general_conversation")
+            workflow.add_edge("greeting", "collecting_info")
+            workflow.add_edge("greeting", "policy_selection")
+            
+            workflow.add_edge("general_conversation", "general_conversation")
+            workflow.add_edge("general_conversation", "collecting_info")
+            workflow.add_edge("general_conversation", "policy_selection")
+            
+            workflow.add_edge("collecting_info", "collecting_info")
+            workflow.add_edge("collecting_info", "policy_selection")
+            
+            workflow.add_edge("policy_selection", "policy_selection")
+            workflow.add_edge("policy_selection", "recommendation")
+            
+            workflow.add_edge("recommendation", "policy_acceptance")
+            
+            workflow.add_edge("policy_acceptance", "policy_acceptance")
+            workflow.add_edge("policy_acceptance", "followup")
+            
+            workflow.add_edge("followup", "followup")
+            workflow.add_edge("followup", "completed")
+            
+            # Compile the graph
+            return workflow.compile()
         except Exception as e:
-            # Handle any errors, including recursion limit errors and '__end__' errors
-            print(f"Error in communication agent: {str(e)}")
-            
-            # For new conversations, provide a proper greeting response
-            if self.conversation_history[user_id]["step_count"] <= 1:
-                try:
-                    # Generate a greeting response directly
-                    greeting_msg = self.llm.invoke([
-                        self.system_message,
-                        HumanMessage(content=f"""
-                        The user has just started a conversation with the message: "{message}"
-                        
-                        User details we already have:
-                        {self.conversation_history[user_id]["user_info"]}
-                        
-                        Greet them warmly by name if available, and explain that you'll help them find the right life insurance policy.
-                        If we're missing any essential information (age, gender, smoking status, health), ask for it.
-                        If we have all the essential information, ask about their insurance needs and preferences.
-                        Be conversational and friendly, but get straight to the point.
-                        DO NOT provide any policy recommendations yet unless we have all required information.
-                        """)
-                    ])
-                    
-                    # Update conversation history with this message
-                    self.conversation_history[user_id]["messages"].append(greeting_msg)
-                    self.conversation_history[user_id]["step_count"] += 1
-                    self.conversation_history[user_id]["conversation_stage"] = "collecting_info"
-                    
-                    return {
-                        "response": greeting_msg.content,
-                        "conversation_stage": "collecting_info"
-                    }
-                except Exception as inner_e:
-                    print(f"Error generating greeting: {str(inner_e)}")
-            
-            # Default fallback response
-            return {
-                "response": "Hello! I'm your friendly insurance advisor. I can help you find the right life insurance policy for your needs. To get started, could you please tell me a bit about yourself? I'd like to know your age, gender, and whether you smoke. This information will help me provide personalized recommendations for you.",
-                "conversation_stage": "collecting_info"
-            }
-    
+            print(f"Error creating graph: {str(e)}")
+            return None
+
+    ### Remaining Methods (Unchanged from Original) ###
+
     def _direct_recommendation(self, state: CommunicationState) -> CommunicationState:
-        """
-        Get policy recommendations directly without running the full graph.
-        
-        Args:
-            state: The current state.
-            
-        Returns:
-            The updated state.
-        """
-        # Step 1: Get risk assessment from risk assessment agent
+        """Get policy recommendations directly without running the full graph."""
         print(f"Step 1: Getting risk assessment from risk assessment agent")
         risk_assessment_result = self.risk_agent.invoke(state["user_info"])
         print(f"Risk assessment completed with score: {risk_assessment_result.get('risk_score')}")
-        
-        # Step 2: Get premium calculation from premium calculation agent
+
         print(f"Step 2: Getting premium calculation from premium calculation agent")
         premium_calculation_result = self.premium_agent.invoke(
-            state["user_info"], 
-            risk_assessment_result, 
+            state["user_info"],
+            risk_assessment_result,
             state["policy_details"]
         )
         print(f"Premium calculation completed with annual premium: ${premium_calculation_result.get('annual_premium')}")
-        
-        # Step 3: Get policy recommendation from policy recommendation agent
+
         print(f"Step 3: Getting policy recommendation from policy recommendation agent")
         policy_recommendation = self.policy_agent.invoke_with_results(
             state["user_info"],
@@ -1260,53 +833,64 @@ class CommunicationAgent:
             premium_calculation_result
         )
         print(f"Policy recommendation completed with recommended policy: {policy_recommendation['recommended_policy']['policy_type']}")
-        
-        # Combine all results for the recommendation
+
         recommendation_result = {
             "risk_assessment": risk_assessment_result,
             "premium_calculation": premium_calculation_result,
             "policy_recommendation": policy_recommendation
         }
-        
-        # Create a message for the LLM to format the recommendation
-        messages = [
-            self.system_message,
-            HumanMessage(content=f"""
-            Based on the user's information and policy preferences, we have the following recommendation:
-            
-            Risk Assessment:
-            - Risk Score: {recommendation_result["risk_assessment"].get("risk_score")}
-            - Risk Factors: {recommendation_result["risk_assessment"].get("risk_factors")}
-            
-            Premium Calculation:
-            - Annual Premium: ${recommendation_result["premium_calculation"].get("annual_premium")}
-            - Monthly Premium: ${recommendation_result["premium_calculation"].get("monthly_premium")}
-            
-            Policy Recommendation:
-            - Recommended Policy: {recommendation_result["policy_recommendation"]["recommended_policy"]["policy_type"]}
-            - Coverage Amount: ${recommendation_result["policy_recommendation"]["recommended_policy"]["coverage_amount"]}
-            - Term Length: {recommendation_result["policy_recommendation"]["recommended_policy"].get("term_length", "N/A")} years
-            - Premium: ${recommendation_result["policy_recommendation"]["recommended_policy"]["premium"]}
-            - Recommended Riders: {recommendation_result["policy_recommendation"]["recommended_policy"]["recommended_riders"]}
-            
-            Alternative Policies:
-            {recommendation_result["policy_recommendation"]["alternative_policies"]}
-            
-            Explanation:
-            {recommendation_result["policy_recommendation"]["explanation"]}
-            
-            Respond to the user by summarizing this recommendation in a clear, friendly, and professional manner.
-            Address the user by name if available.
-            Explain the recommendation and why it's suitable based on their risk profile and needs.
-            Ask if they have any questions or if they'd like to proceed with the recommended policy.
-            Mention that we are moving to the follow-up phase to address any questions they might have.
+
+        response = None
+        try:
+            if self.llm is None:
+                self.llm = self.llm_utility.get_llm()
+            messages = [
+                self.system_message,
+                HumanMessage(content=f"""
+                Based on the user's information and policy preferences, we have the following recommendation:
+
+                Risk Assessment:
+                - Risk Score: {recommendation_result["risk_assessment"].get("risk_score")}
+                - Risk Factors: {recommendation_result["risk_assessment"].get("risk_factors")}
+
+                Premium Calculation:
+                - Annual Premium: ${recommendation_result["premium_calculation"].get("annual_premium")}
+                - Monthly Premium: ${recommendation_result["premium_calculation"].get("monthly_premium")}
+
+                Policy Recommendation:
+                - Recommended Policy: {recommendation_result["policy_recommendation"]["recommended_policy"]["policy_type"]}
+                - Coverage Amount: ${recommendation_result["policy_recommendation"]["recommended_policy"]["coverage_amount"]}
+                - Term Length: {recommendation_result["policy_recommendation"]["recommended_policy"].get("term_length", "N/A")} years
+                - Premium: ${recommendation_result["policy_recommendation"]["recommended_policy"]["premium"]}
+                - Recommended Riders: {recommendation_result["policy_recommendation"]["recommended_policy"]["recommended_riders"]}
+
+                Alternative Policies:
+                {recommendation_result["policy_recommendation"]["alternative_policies"]}
+
+                Explanation:
+                {recommendation_result["policy_recommendation"]["explanation"]}
+
+                Respond to the user by summarizing this recommendation in a clear, friendly, and professional manner.
+                Address the user by name if available.
+                Explain the recommendation and why it's suitable based on their risk profile and needs.
+                Ask if they have any questions or if they'd like to proceed with the recommended policy.
+                Mention that we are moving to the follow-up phase to address any questions they might have.
+                """)
+            ]
+            response = self.llm.invoke(messages)
+        except Exception as e:
+            print(f"Error generating recommendation response: {str(e)}")
+            response = AIMessage(content=f"""
+            Based on your profile, I've analyzed several policy options for you.
+
+            Our recommendation is a {recommendation_result["policy_recommendation"]["recommended_policy"]["policy_type"]} policy with
+            ${recommendation_result["policy_recommendation"]["recommended_policy"]["coverage_amount"]} coverage.
+
+            The premium would be approximately ${recommendation_result["policy_recommendation"]["recommended_policy"]["premium"]} per month.
+
+            Would you like more details about this policy or would you prefer to explore other options?
             """)
-        ]
-        
-        # Get response from LLM
-        response = self.llm.invoke(messages)
-        
-        # Update the state
+
         return {
             "messages": state["messages"] + [response],
             "user_info": state["user_info"],
@@ -1315,280 +899,87 @@ class CommunicationAgent:
             "conversation_stage": "followup",
             "step_count": state.get("step_count", 0) + 1
         }
-    
+
     def invoke(self, message: str, user_id: str = "default_user", user_details: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Invoke the communication agent with a user message (synchronous version).
-        
-        Args:
-            message: The user message.
-            user_id: The user ID.
-            user_details: Optional user details from the frontend onboarding form.
-            
-        Returns:
-            The response from the agent.
-        """
+        """Invoke the communication agent synchronously."""
         try:
-            # Use asyncio to run the async method in a synchronous context
-            import asyncio
-            
-            # Create a new event loop if necessary (for thread safety)
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_closed():
-                    raise RuntimeError("Event loop is closed")
-            except (RuntimeError, AssertionError):
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-            
-            # Run the async method
             result = loop.run_until_complete(self.invoke_async(message, user_id, user_details))
-            
-            # Clean up if we created a new loop
             if asyncio.get_event_loop() != loop:
                 loop.close()
-                
             return result
         except Exception as e:
             print(f"Error in invoke: {str(e)}")
             return {"response": "I'm sorry, I encountered an error. Please try again.", "conversation_stage": "greeting"}
-            
-        # Get or initialize conversation history
+
+    def _process_json_input(self, message: str, user_id: str) -> bool:
+        """Process JSON input from the user and update conversation history."""
+        try:
+            json_data = json.loads(message)
+            if not isinstance(json_data, dict):
+                return False
+        except json.JSONDecodeError:
+            return False
+
         if user_id not in self.conversation_history:
-            print(f"Initializing new conversation for user {user_id}")
             self.conversation_history[user_id] = {
                 "messages": [self.system_message],
-                "user_info": {},  # Initialize as empty dict instead of None
-                "policy_details": {},  # Initialize as empty dict instead of None
+                "user_info": {},
+                "policy_details": {},
                 "recommendation_result": None,
                 "conversation_stage": "greeting",
-                "step_count": 0  # Initialize step count
+                "step_count": 0
             }
-        
-        # Process JSON input if provided
-        json_processed = self._process_json_input(message, user_id)
-        
-        # Add user message to history
-        user_message = HumanMessage(content=message)
-        self.conversation_history[user_id]["messages"].append(user_message)
-        
-        # Debug: Print current conversation stage
-        print(f"Before graph execution - User: {user_id}, Stage: {self.conversation_history[user_id]['conversation_stage']}")
-        
-        
-        # Check if we have all required information to skip directly to recommendations
-        user_info = self.conversation_history[user_id]["user_info"]
-        policy_details = self.conversation_history[user_id]["policy_details"]
-        
-        required_user_fields = ["age", "gender", "smoking", "health"]
-        required_policy_fields = ["coverage_amount", "policy_type"]
-        
-        has_user_info = all(field in user_info for field in required_user_fields)
-        has_policy_info = all(field in policy_details for field in required_policy_fields)
-        
-        # If we are in recommendation stage or have complete info, generate recommendation directly
-        if self.conversation_history[user_id]["conversation_stage"] == "recommendation" or (has_user_info and has_policy_info):
-            print(f"Complete info available. Generating recommendation for user {user_id}")
-            
-            try:
-                # Directly run the recommendation node
-                state = self.conversation_history[user_id]
-                updated_state = self._direct_recommendation(state)
-                self.conversation_history[user_id] = updated_state
-                
-                # Return the last AI message
-                for msg in reversed(updated_state["messages"]):
-                    if isinstance(msg, AIMessage):
-                        return {
-                            "response": msg.content,
-                            "conversation_stage": "followup"
-                        }
-            except Exception as e:
-                print(f"Error generating direct recommendation: {str(e)}")
-                # Continue with normal flow if direct recommendation fails
-        
-        # Check if this is a general question that needs a quick response
-        is_general_question = self._is_general_question(message)
-        
-        # For general questions, provide a quick response without running the full graph
-        if is_general_question and self.conversation_history[user_id]["step_count"] <= 1:
-            try:
-                # Generate a quick response directly
-                quick_response = self._generate_quick_response_sync(message, user_id)
-                
-                # Update conversation history
-                self.conversation_history[user_id]["messages"].append(quick_response)
-                self.conversation_history[user_id]["step_count"] += 1
-                
-                return {
-                    "response": quick_response.content,
-                    "conversation_stage": "collecting_info"
-                }
-            except Exception as e:
-                print(f"Error generating quick response: {str(e)}")
-                # Continue with normal flow if quick response fails
-        
-        try:
-            # Run the graph with increased recursion limit and optimized settings
-            result = self.graph.invoke(
-                self.conversation_history[user_id],
-                {
-                    "recursion_limit": 50,  # Increase recursion limit from default 25 to 50
-                    "max_concurrency": MAX_CONCURRENCY  # Limit concurrent operations
-                }
-            )
-            
-            # Debug: Print resulting conversation stage
-            print(f"After graph execution - User: {user_id}, Stage: {result['conversation_stage']}")
-            
-            # Ensure proper conversation flow - don't skip stages for new conversations
-            if (self.conversation_history[user_id]["step_count"] <= 1 and 
-                result["conversation_stage"] not in ["greeting", "general_conversation", "collecting_info"] and
-                not json_processed):  # Skip this check if JSON was successfully processed
-                print(f"Warning: Conversation jumped to {result['conversation_stage']} too quickly. Resetting to collecting_info.")
-                result["conversation_stage"] = "collecting_info"
-                
-                # Force a proper greeting/info collection response
-                for msg in reversed(result["messages"]):
-                    if isinstance(msg, AIMessage):
-                        # Replace the last AI message with a proper greeting
-                        greeting_msg = self.llm.invoke([
-                            self.system_message,
-                            HumanMessage(content=f"""
-                            The user has just started a conversation with the message: "{message}"
-                            
-                            User details we already have:
-                            {self.conversation_history[user_id]["user_info"]}
-                            
-                            Greet them warmly by name if available, and explain that you'll help them find the right life insurance policy.
-                            If we're missing any essential information (age, gender, smoking status, health), ask for it.
-                            If we have all the essential information, ask about their insurance needs and preferences.
-                            Be conversational and friendly, but get straight to the point.
-                            DO NOT provide any policy recommendations yet unless we have all required information.
-                            """)
-                        ])
-                        
-                        # Replace the last message
-                        result["messages"] = list(result["messages"])
-                        result["messages"][-1] = greeting_msg
-                        break
-            
-            # Update conversation history
-            self.conversation_history[user_id] = result
-            
-            # Return the last AI message
-            for msg in reversed(result["messages"]):
-                if isinstance(msg, AIMessage):
-                    return {
-                        "response": msg.content,
-                        "conversation_stage": result["conversation_stage"]
-                    }
-            
-            # Fallback if no AI message is found
-            return {
-                "response": "I'm sorry, I couldn't process your request. Please try again.",
-                "conversation_stage": result["conversation_stage"]
-            }
-        except Exception as e:
-            # Handle any errors, including recursion limit errors and '__end__' errors
-            print(f"Error in communication agent: {str(e)}")
-            
-            # For new conversations, provide a proper greeting response
-            if self.conversation_history[user_id]["step_count"] <= 1:
-                try:
-                    # Generate a greeting response directly
-                    greeting_msg = self.llm.invoke([
-                        self.system_message,
-                        HumanMessage(content=f"""
-                        The user has just started a conversation with the message: "{message}"
-                        
-                        User details we already have:
-                        {self.conversation_history[user_id]["user_info"]}
-                        
-                        Greet them warmly by name if available, and explain that you'll help them find the right life insurance policy.
-                        If we're missing any essential information (age, gender, smoking status, health), ask for it.
-                        If we have all the essential information, ask about their insurance needs and preferences.
-                        Be conversational and friendly, but get straight to the point.
-                        DO NOT provide any policy recommendations yet unless we have all required information.
-                        """)
-                    ])
-                    
-                    # Update conversation history with this message
-                    self.conversation_history[user_id]["messages"].append(greeting_msg)
-                    self.conversation_history[user_id]["step_count"] += 1
-                    self.conversation_history[user_id]["conversation_stage"] = "collecting_info"
-                    
-                    return {
-                        "response": greeting_msg.content,
-                        "conversation_stage": "collecting_info"
-                    }
-                except Exception as inner_e:
-                    print(f"Error generating greeting: {str(inner_e)}")
-            
-            # Default fallback response
-            return {
-                "response": "Hello! I'm your friendly insurance advisor. I can help you find the right life insurance policy for your needs. To get started, could you please tell me a bit about yourself? I'd like to know your age, gender, and whether you smoke. This information will help me provide personalized recommendations for you.",
-                "conversation_stage": "collecting_info"
-            }
-    
+
+        if "user_info" in json_data and json_data["user_info"]:
+            self.conversation_history[user_id]["user_info"].update(json_data["user_info"])
+            print(f"Updated user info from JSON: {self.conversation_history[user_id]['user_info']}")
+            if "diet" in json_data["user_info"] and "health" not in self.conversation_history[user_id]["user_info"]:
+                self.conversation_history[user_id]["user_info"]["health"] = f"Diet: {json_data['user_info']['diet']}"
+
+        if "policy_details" in json_data and json_data["policy_details"]:
+            self.conversation_history[user_id]["policy_details"].update(json_data["policy_details"])
+            print(f"Updated policy details from JSON: {self.conversation_history[user_id]['policy_details']}")
+
+        return "user_info" in json_data or "policy_details" in json_data
+
     def _is_general_question(self, message: str) -> bool:
-        """
-        Check if the message is a general question that doesn't require running the full graph.
-        
-        Args:
-            message: The user message.
-            
-        Returns:
-            True if the message is a general question, False otherwise.
-        """
+        """Check if the message is a general question."""
         message = message.lower().strip()
-        
-        # List of terms related to insurance/policies that would require the full graph
         insurance_terms = [
-            "insurance", "policy", "coverage", "premium", "claim", "beneficiary", 
-            "underwriting", "death benefit", "term", "whole life", "universal", 
-            "rider", "quote", "risk", "application", "health", "medical"
+            "insurance", "policy", "coverage", "premium", "claim", "beneficiary",
+            "underwriting", "death benefit", "term", "whole life", "universal",
+            "rider", "quote", "risk", "application", "health", "medical",
+            "recommend", "suggest", "option", "plan"
         ]
-        
-        # Check if message contains any insurance-related terms
+        affirmative_responses = [
+            "yes please", "yes", "sure", "ok", "okay", "go ahead",
+            "please do", "i'd like that", "sounds good", "that would be great"
+        ]
+        is_affirmative = any(resp in message for resp in affirmative_responses)
         contains_insurance_terms = any(term in message for term in insurance_terms)
-        
-        # Check if message is a short greeting or general question
+        if is_affirmative:
+            return False
         is_greeting = len(message.split()) <= 7 and any(
             greeting in message for greeting in [
-                "hi", "hello", "hey", "good morning", "good afternoon", 
+                "hi", "hello", "hey", "good morning", "good afternoon",
                 "good evening", "what's up", "how are you"
             ]
         )
-        
-        # Check if it's a simple question about capabilities
         is_about_capabilities = "what can you" in message or "help me with" in message or "how do you" in message
-        
-        # Return true for greetings or capability questions, but not for insurance-related queries
         return (is_greeting or is_about_capabilities) and not contains_insurance_terms
 
     def _load_user_data(self, user_id: str) -> Dict[str, Any]:
-        """
-        Load user data from the Users folder.
-        
-        Args:
-            user_id: The user ID.
-            
-        Returns:
-            User data from the Users folder, or None if not found.
-        """
-        import os
-        import json
-        
-        # Try multiple possible paths for the user file
+        """Load user data from the Users folder."""
         possible_paths = [
-            os.path.join("users", f"{user_id}.json"),  # lowercase folder
-            os.path.join("Users", f"{user_id}.json"),  # uppercase folder
-            os.path.join("users", f"{user_id.split('_')[0]}.json"),  # In case session ID was passed
-            os.path.join("Users", f"{user_id.split('_')[0]}.json")   # In case session ID was passed with uppercase
+            os.path.join("users", f"{user_id}.json"),
+            os.path.join("Users", f"{user_id}.json"),
+            os.path.join("users", f"{user_id.split('_')[0]}.json"),
+            os.path.join("Users", f"{user_id.split('_')[0]}.json")
         ]
-        
-        # Try each path
         for user_file_path in possible_paths:
             if os.path.exists(user_file_path):
                 try:
@@ -1598,88 +989,58 @@ class CommunicationAgent:
                         return user_data
                 except Exception as e:
                     print(f"Error loading user data from {user_file_path}: {str(e)}")
-                    continue  # Try the next path
-        
         print(f"No user file found for user {user_id} in any of these paths: {possible_paths}")
         return None
-    
+
     async def _generate_quick_response(self, message: str, user_id: str) -> AIMessage:
-        """
-        Generate a quick response for general questions without running the full graph.
-        
-        Args:
-            message: The user message.
-            user_id: The user ID.
-            
-        Returns:
-            An AI message with the quick response.
-        """
+        """Generate a quick response for general questions."""
         user_info = self.conversation_history[user_id].get("user_info", {}) or {}
         user_name = user_info.get("name", "")
-        
-        # Check if this is a question about the user's personal information
         is_about_self = any(pattern in message.lower() for pattern in [
-            "tell me about myself", "who am i", "what do you know about me", 
+            "tell me about myself", "who am i", "what do you know about me",
             "my information", "my details", "my profile", "what information do you have"
         ])
-        
-        # If this is a question about the user but we don't have info, try to load it again
         if is_about_self and (not user_info or len(user_info) == 0):
             loaded_user_data = self._load_user_data(user_id)
             if loaded_user_data:
                 print(f"Loaded user data on demand for personal info query: {user_id}")
                 user_info = {}
-                
-                # Map fields from stored user data to our internal structure
                 if "age" in loaded_user_data:
                     try:
                         user_info["age"] = int(loaded_user_data["age"])
                     except (ValueError, TypeError):
                         user_info["age"] = loaded_user_data["age"]
-                
                 if "gender" in loaded_user_data:
                     user_info["gender"] = loaded_user_data["gender"]
-                    
                 if "name" in loaded_user_data:
                     user_info["name"] = loaded_user_data["name"]
-                
                 if "smoker" in loaded_user_data:
                     user_info["smoking"] = "yes" if loaded_user_data["smoker"] == "Yes" else "no"
-                
                 if "preExistingConditions" in loaded_user_data or "familyHistory" in loaded_user_data:
                     health_conditions = []
                     if loaded_user_data.get("preExistingConditions") == "Yes":
                         health_conditions.append("Has pre-existing conditions")
                     if loaded_user_data.get("familyHistory") == "Yes":
                         health_conditions.append("Has family history of serious illnesses")
-                    
                     if health_conditions:
                         user_info["health"] = ", ".join(health_conditions)
-                
-                # Add more fields as needed
                 if "income" in loaded_user_data:
                     user_info["income"] = loaded_user_data["income"]
-                
                 if "maritalStatus" in loaded_user_data:
                     user_info["marital_status"] = loaded_user_data["maritalStatus"]
-                
                 if "occupation" in loaded_user_data:
                     user_info["occupation"] = loaded_user_data["occupation"]
-                    
-                # Update the conversation history
                 self.conversation_history[user_id]["user_info"] = user_info
-        
-        # Check if this is an educational question about insurance
+
         is_insurance_education = any(pattern in message.lower() for pattern in [
-            "what is life insurance", "what is insurance", "what is a policy", 
+            "what is life insurance", "what is insurance", "what is a policy",
             "how does life insurance work", "explain life insurance", "tell me about life insurance",
             "types of insurance", "types of life insurance", "different policies",
             "difference between", "explain the difference", "what's the difference",
             "no, just tell me", "just explain"
         ])
-        
+
         if is_insurance_education:
-            # Create a message for the LLM specifically for educational insurance questions
             messages = [
                 SystemMessage(content="""You are Cora, a knowledgeable AI assistant specializing in insurance topics.
                 Provide educational, informative responses about insurance concepts.
@@ -1688,102 +1049,128 @@ class CommunicationAgent:
                 """),
                 HumanMessage(content=f"""
                 The user has asked an educational question about insurance: "{message}"
-                
+
                 Provide a helpful, educational explanation about the requested insurance topic.
                 Focus on being informative and educational rather than trying to sell a policy.
                 Don't ask for personal information - just explain the concept they're asking about.
-                
+
                 After explaining, you can mention that if they're interested in personalized recommendations later,
                 you'd be happy to help, but don't pressure them for information.
                 """)
             ]
         elif is_about_self:
-            # Create a message for information about the user
             if user_info and len(user_info) > 0:
-                # We have user information
                 messages = [
                     self.system_message,
                     HumanMessage(content=f"""
                     The user has asked about their personal information: "{message}"
-                    
+
                     User details we have:
                     {user_info}
-                    
+
                     Provide a friendly summary of the information we have about them. Use their name
                     if available. Mention key details like their age, gender, health status, etc.
                     Be conversational and friendly. If there are gaps in our information, you can acknowledge that.
-                    
+
                     Don't ask for additional information - just summarize what we already know.
                     """)
                 ]
             else:
-                # We don't have user information
                 messages = [
                     self.system_message,
                     HumanMessage(content=f"""
                     The user has asked about their personal information: "{message}"
-                    
+
                     We don't have any user information stored yet.
-                    
+
                     Explain that you don't have their information yet, but that you can help them with other questions.
                     Invite them to complete the onboarding process if they'd like to share their details for personalized
                     insurance recommendations. Be conversational and friendly.
                     """)
                 ]
         else:
-            # Create a message for the LLM for other general questions
             messages = [
                 self.system_message,
                 HumanMessage(content=f"""
                 The user has sent a general message: "{message}"
-                
+
                 User details we already have:
                 {user_info}
-                
+
                 Provide a quick, friendly response that:
                 1. Greets them by name if available
                 2. Addresses their specific question directly
                 3. If the question is about your capabilities, explain that you're a versatile assistant who can discuss many topics and also help with insurance questions if they're interested
                 4. Be conversational and helpful without pushing for personal information unless they specifically ask for insurance recommendations
-                
+
                 Keep your response concise, friendly, and helpful. Focus on answering their immediate question.
                 """)
             ]
-        
+
         try:
-            # Get response from LLM with a shorter timeout
+            if not hasattr(self, 'llm_utility') or self.llm_utility is None:
+                print(f"LLM utility not available for async invocation. Using direct response.")
+                return AIMessage(content="Hello! I'm here to help with any questions you have about insurance or general topics. How can I assist you today?")
             response = await self.llm_utility.ainvoke(messages, temperature=0.7, max_tokens=400)
             return response
         except Exception as e:
             print(f"Error generating quick response: {str(e)}")
-            # Fallback response in case of error
             return AIMessage(content="Hello! I'm here to help with any questions you have about insurance or general topics. How can I assist you today?")
-    
+
     def _generate_quick_response_sync(self, message: str, user_id: str) -> AIMessage:
-        """
-        Generate a quick response for general questions without running the full graph (synchronous version).
-        
-        Args:
-            message: The user message.
-            user_id: The user ID.
-            
-        Returns:
-            An AI message with the quick response.
-        """
+        """Generate a quick response synchronously."""
         user_info = self.conversation_history[user_id]["user_info"]
         user_name = user_info.get("name", "")
-        
-        # Check if this is an educational question about insurance
+        is_about_self = any(pattern in message.lower() for pattern in [
+            "tell me about myself", "who am i", "what do you know about me",
+            "my information", "my details", "my profile", "what information do you have"
+        ])
+        if is_about_self and (not user_info or len(user_info) == 0):
+            loaded_user_data = self._load_user_data(user_id)
+            if loaded_user_data:
+                print(f"Loaded user data on demand for personal info query: {user_id}")
+                user_info = {}
+                if "age" in loaded_user_data:
+                    try:
+                        user_info["age"] = int(loaded_user_data["age"])
+                    except (ValueError, TypeError):
+                        user_info["age"] = loaded_user_data["age"]
+                if "gender" in loaded_user_data:
+                    user_info["gender"] = loaded_user_data["gender"]
+                if "name" in loaded_user_data:
+                    user_info["name"] = loaded_user_data["name"]
+                if "smoker" in loaded_user_data:
+                    user_info["smoking"] = "yes" if loaded_user_data["smoker"] == "Yes" else "no"
+                if "diet" in loaded_user_data:
+                    user_info["health"] = f"Diet: {loaded_user_data['diet']}"
+                if "preExistingConditions" in loaded_user_data or "familyHistory" in loaded_user_data:
+                    health_conditions = []
+                    if loaded_user_data.get("preExistingConditions") == "Yes":
+                        health_conditions.append("Has pre-existing conditions")
+                    if loaded_user_data.get("familyHistory") == "Yes":
+                        health_conditions.append("Has family history of serious illnesses")
+                    if health_conditions:
+                        if "health" in user_info:
+                            user_info["health"] += ", " + ", ".join(health_conditions)
+                        else:
+                            user_info["health"] = ", ".join(health_conditions)
+                if "income" in loaded_user_data:
+                    user_info["income"] = loaded_user_data["income"]
+                if "maritalStatus" in loaded_user_data:
+                    user_info["marital_status"] = loaded_user_data["maritalStatus"]
+                if "occupation" in loaded_user_data:
+                    user_info["occupation"] = loaded_user_data["occupation"]
+                self.conversation_history[user_id]["user_info"] = user_info
+
         is_insurance_education = any(pattern in message.lower() for pattern in [
-            "what is life insurance", "what is insurance", "what is a policy", 
+            "what is life insurance", "what is insurance", "what is a policy",
             "how does life insurance work", "explain life insurance", "tell me about life insurance",
             "types of insurance", "types of life insurance", "different policies",
             "difference between", "explain the difference", "what's the difference",
             "no, just tell me", "just explain"
         ])
-        
+
         if is_insurance_education:
-            # Create a message for the LLM specifically for educational insurance questions
             messages = [
                 SystemMessage(content="""You are Cora, a knowledgeable AI assistant specializing in insurance topics.
                 Provide educational, informative responses about insurance concepts.
@@ -1792,75 +1179,286 @@ class CommunicationAgent:
                 """),
                 HumanMessage(content=f"""
                 The user has asked an educational question about insurance: "{message}"
-                
+
                 Provide a helpful, educational explanation about the requested insurance topic.
                 Focus on being informative and educational rather than trying to sell a policy.
                 Don't ask for personal information - just explain the concept they're asking about.
-                
-                
+
+                After explaining, you can mention that if they're interested in personalized recommendations later,
+                you'd be happy to help, but don't pressure them for information.
+                """)
+            ]
+        elif is_about_self:
+            if user_info and len(user_info) > 0:
+                messages = [
+                    self.system_message,
+                    HumanMessage(content=f"""
+                    The user has asked about their personal information: "{message}"
+
+                    User details we have:
+                    {user_info}
+
+                    Provide a friendly summary of the information we have about them. Use their name
+                    if available. Mention key details like their age, gender, health status, etc.
+                    Be conversational and friendly. If there are gaps in our information, you can acknowledge that.
+
+                    Don't ask for additional information - just summarize what we already know.
+                    """)
+                ]
+            else:
+                messages = [
+                    self.system_message,
+                    HumanMessage(content=f"""
+                    The user has asked about their personal information: "{message}"
+
+                    We don't have any user information stored yet.
+
+                    Explain that you don't have their information yet, but that you can help them with other questions.
+                    Invite them to complete the onboarding process if they'd like to share their details for personalized
+                    insurance recommendations. Be conversational and friendly.
+                    """)
+                ]
+        else:
+            messages = [
+                self.system_message,
+                HumanMessage(content=f"""
+                The user has sent a general message: "{message}"
+
+                User details we already have:
+                {user_info}
+
                 Provide a quick, friendly response that:
                 1. Greets them by name if available
                 2. Addresses their specific question directly
                 3. If the question is about your capabilities, explain that you're a versatile assistant who can discuss many topics and also help with insurance questions if they're interested
                 4. Be conversational and helpful without pushing for personal information unless they specifically ask for insurance recommendations
-                
+
                 Keep your response concise, friendly, and helpful. Focus on answering their immediate question.
                 """)
             ]
-        
-        # Get response from LLM with a shorter timeout
-        response = self.llm_utility.invoke(messages, temperature=0.7, max_tokens=400)
-        return response
-    
+
+        try:
+            response = self.llm_utility.invoke(messages, temperature=0.7, max_tokens=400)
+            return response
+        except Exception as e:
+            print(f"Error generating quick response: {str(e)}")
+            return AIMessage(content="Hello! I'm here to help with any questions you have about insurance or general topics. How can I assist you today?")
+
     def get_conversation_history(self, user_id: str) -> List[Dict[str, Any]]:
-        """
-        Get the conversation history for a user.
-        
-        Args:
-            user_id: The user ID.
-            
-        Returns:
-            The conversation history.
-        """
+        """Get the conversation history for a user."""
         if user_id not in self.conversation_history:
             return []
-        
-        # Convert messages to a more readable format
         history = []
         for msg in self.conversation_history[user_id]["messages"]:
             if isinstance(msg, HumanMessage):
                 history.append({"role": "user", "content": msg.content})
             elif isinstance(msg, AIMessage):
                 history.append({"role": "assistant", "content": msg.content})
-        
         return history
 
     def _is_insurance_related(self, message: str) -> bool:
-        """
-        Determine if a message is related to insurance topics.
-        
-        Args:
-            message: The user message.
-            
-        Returns:
-            True if the message is related to insurance, False otherwise.
-        """
-        # Convert to lowercase for case-insensitive matching
+        """Determine if a message is related to insurance topics."""
         message_lower = message.lower()
-        
-        # List of insurance-related terms
         insurance_terms = [
-            "insurance", "policy", "coverage", "premium", "term life", "whole life", 
-            "life insurance", "health insurance", "medical insurance", "risk assessment", 
-            "insure", "benefits", "claim", "protection", "financial security", 
+            "insurance", "policy", "coverage", "premium", "term life", "whole life",
+            "life insurance", "health insurance", "medical insurance", "risk assessment",
+            "insure", "benefits", "claim", "protection", "financial security",
             "death benefit", "beneficiary", "underwriting", "quote", "riders"
         ]
-        
-        # Check if any insurance-related term is in the message
-        for term in insurance_terms:
-            if term in message_lower:
-                return True
-                
-        return False
+        return any(term in message_lower for term in insurance_terms)
 
+    def _get_or_initialize_conversation(self, user_id: str) -> Dict[str, Any]:
+        """Get existing conversation or initialize a new one."""
+        if user_id in self.conversation_history:
+            return self.conversation_history[user_id]
 
+        print(f"Initializing new conversation for user {user_id}")
+        conversation = {
+            "messages": [self.system_message],
+            "user_info": {},
+            "policy_details": {},
+            "recommendation_result": None,
+            "conversation_stage": "greeting",
+            "step_count": 0
+        }
+        user_data = self._load_user_data(user_id)
+        if user_data:
+            print(f"Found existing user data for {user_id}: {user_data}")
+            if "age" in user_data:
+                try:
+                    conversation["user_info"]["age"] = int(user_data["age"])
+                except (ValueError, TypeError):
+                    conversation["user_info"]["age"] = user_data["age"]
+            if "gender" in user_data:
+                conversation["user_info"]["gender"] = user_data["gender"]
+            if "name" in user_data:
+                conversation["user_info"]["name"] = user_data["name"]
+            if "smoker" in user_data:
+                conversation["user_info"]["smoking"] = "yes" if user_data["smoker"] == "Yes" else "no"
+            if "diet" in user_data:
+                conversation["user_info"]["diet"] = user_data["diet"]
+                if "health" not in conversation["user_info"]:
+                    conversation["user_info"]["health"] = f"Diet: {user_data['diet']}"
+            if "preExistingConditions" in user_data or "familyHistory" in user_data:
+                health_conditions = []
+                if user_data.get("preExistingConditions") == "Yes":
+                    health_conditions.append("Has pre-existing conditions")
+                if user_data.get("familyHistory") == "Yes":
+                    health_conditions.append("Has family history of serious illnesses")
+                if health_conditions:
+                    if "health" in conversation["user_info"]:
+                        conversation["user_info"]["health"] += ", " + ", ".join(health_conditions)
+                    else:
+                        conversation["user_info"]["health"] = ", ".join(health_conditions)
+            if "income" in user_data:
+                conversation["user_info"]["income"] = user_data["income"]
+            if "maritalStatus" in user_data:
+                conversation["user_info"]["marital_status"] = user_data["maritalStatus"]
+            if "occupation" in user_data:
+                conversation["user_info"]["occupation"] = user_data["occupation"]
+            required_fields = ["age", "gender", "smoking"]
+            if all(field in conversation["user_info"] for field in required_fields):
+                print(f"User {user_id} has required fields. Setting stage to collecting_info.")
+                conversation["conversation_stage"] = "collecting_info"
+
+        self.conversation_history[user_id] = conversation
+        return conversation
+
+    async def invoke_async(self, message: str, user_id: str = "default_user", user_details: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Invoke the communication agent asynchronously."""
+        try:
+            conversation = self._get_or_initialize_conversation(user_id)
+            if user_details:
+                print(f"Received user details from frontend: {user_details}")
+                conversation["user_info"].update(user_details)
+
+            user_message = HumanMessage(content=message)
+            conversation["messages"].append(user_message)
+
+            print(f"Before async graph execution - User: {user_id}, Stage: {conversation['conversation_stage']}")
+
+            if self.graph is None:
+                print(f"Graph not initialized. Creating graph for user: {user_id}")
+                self.graph = self._create_graph()
+
+            if self.graph is None:
+                print("Graph initialization failed. Using direct message response.")
+                current_stage = conversation["conversation_stage"]
+                step_count = conversation["step_count"]
+                if step_count > 0 and current_stage != "greeting":
+                    is_insurance_request = any(term in message.lower() for term in [
+                        "insurance", "policy", "recommend", "suggestions", "options",
+                        "coverage", "protection", "life insurance", "term life", "whole life"
+                    ])
+                    user_info = conversation["user_info"]
+                    has_user_info = len(user_info) > 2
+                    if is_insurance_request and has_user_info and "policy_selection" in current_stage:
+                        try:
+                            print(f"Attempting direct recommendation for user {user_id} in stage {current_stage}")
+                            state = conversation
+                            state["policy_details"] = state.get("policy_details", {})
+                            if not state["policy_details"]:
+                                state["policy_details"] = {
+                                    "policy_type": "Term Life",
+                                    "coverage_amount": 2000000,
+                                    "term_length": 20
+                                }
+                            updated_state = self._direct_recommendation(state)
+                            conversation.update(updated_state)
+                            for msg in reversed(updated_state["messages"]):
+                                if isinstance(msg, AIMessage):
+                                    return {
+                                        "response": msg.content,
+                                        "conversation_stage": "followup"
+                                    }
+                        except Exception as e:
+                            print(f"Error in direct recommendation: {str(e)}")
+                quick_response = await self._generate_quick_response(message, user_id)
+                conversation["messages"].append(quick_response)
+                conversation["step_count"] += 1
+                return {
+                    "response": quick_response.content,
+                    "conversation_stage": conversation["conversation_stage"]
+                }
+
+            is_insurance_request = any(term in message.lower() for term in [
+                "suggest", "recommend", "insurance", "policy", "coverage",
+                "protection", "life insurance", "need policy", "want insurance",
+                "yes please", "yes", "recommend policy", "get started", "go ahead"
+            ])
+            current_stage = conversation["conversation_stage"]
+            if is_insurance_request:
+                if current_stage == "greeting" or current_stage == "general_conversation":
+                    print(f"Updating stage for user {user_id} from {current_stage} to collecting_info")
+                    conversation["conversation_stage"] = "collecting_info"
+                elif current_stage == "collecting_info":
+                    user_info = conversation["user_info"]
+                    required_fields = ["age", "gender", "smoking"]
+                    if all(field in user_info for field in required_fields):
+                        print(f"Moving user {user_id} from {current_stage} to policy_selection")
+                        conversation["conversation_stage"] = "policy_selection"
+
+            print(f"Running graph for user: {user_id}, Stage: {conversation['conversation_stage']}")
+            try:
+                result = self.graph.invoke(
+                    conversation,
+                    {
+                        "recursion_limit": 50,
+                        "max_concurrency": MAX_CONCURRENCY
+                    }
+                )
+                print(f"After graph execution - User: {user_id}, Stage: {result['conversation_stage']}")
+                conversation.update(result)
+                for msg in reversed(result["messages"]):
+                    if isinstance(msg, AIMessage):
+                        return {
+                            "response": msg.content,
+                            "conversation_stage": result["conversation_stage"]
+                        }
+                return {
+                    "response": "I'm sorry, I couldn't process your request. Please try again.",
+                    "conversation_stage": result["conversation_stage"]
+                }
+            except Exception as e:
+                print(f"Error running graph: {str(e)}")
+                quick_response = await self._generate_quick_response(message, user_id)
+                conversation["messages"].append(quick_response)
+                conversation["step_count"] += 1
+                return {
+                    "response": quick_response.content,
+                    "conversation_stage": conversation["conversation_stage"]
+                }
+        except Exception as e:
+            print(f"Error in communication agent: {str(e)}")
+            if conversation["step_count"] <= 1:
+                try:
+                    greeting_msg = await self.llm_utility.ainvoke([
+                        self.system_message,
+                        HumanMessage(content=f"""
+                        The user has just started a conversation with the message: "{message}"
+
+                        User details we already have:
+                        {conversation["user_info"]}
+
+                        Greet them warmly by name if available, and explain that you'll help them find the right life insurance policy.
+                        If we're missing any essential information (age, gender, smoking status, health), ask for it.
+                        If we have all the essential information, ask about their insurance needs and preferences.
+                        Be conversational and friendly, but get straight to the point.
+                        DO NOT provide any policy recommendations yet unless we have all required information.
+                        """)
+                    ])
+                    conversation["messages"].append(greeting_msg)
+                    conversation["step_count"] += 1
+                    conversation["conversation_stage"] = "collecting_info"
+                    return {
+                        "response": greeting_msg.content,
+                        "conversation_stage": "collecting_info"
+                    }
+                except Exception as inner_e:
+                    print(f"Error generating greeting: {str(inner_e)}")
+            current_stage = conversation["conversation_stage"]
+            fallback_response = "I'm here to help with your insurance needs. Could you please let me know if you'd like me to recommend a policy based on your profile information?"
+            return {
+                "response": fallback_response,
+                "conversation_stage": current_stage
+            }
