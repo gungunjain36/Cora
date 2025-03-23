@@ -55,7 +55,41 @@ class CommunicationAgent:
             - Engage in friendly chit-chat about any subject the user brings up
             - Provide thoughtful responses about technology, news, entertainment, general knowledge, etc.
             - Be conversational, professional, and concise in your responses
+            - If the ser asks about any policy recommendations, then you should reply with the following json format. Example:
+            {
+                "policy_type": "[policy_type]",
+                "coverage_amount": [coverage_amount],
+                "term_length": [term_length]
+            }
 
+            You need to return the json format only and nothing else and calculate the premium and term length based on the user's profile information:
+            {
+                "uuid": "cm8icsmjd02cy3giwrz4mt3m5",
+                "walletAddress": "0x478EdbF294DbAaE7ba97458dB540Df85145f6B69",
+                "name": "Gungun Jain",
+                "age": "20",
+                "gender": "Female",
+                "email": "gungunjainxia@gmail.com",
+                "phone": "7906961689",
+                "maritalStatus": "Married",
+                "height": "165",
+                "weight": "68",
+                "medicalConditions": null,
+                "smoker": "No",
+                "alcoholConsumption": "Heavy",
+                "exerciseFrequency": "1-2 times/week",
+                "diet": "Good",
+                "familyHistory": "No",
+                "occupation": "Business Owner",
+                "income": "\u20b915,00,000 - \u20b925,00,000",
+                "coverageAmount": "\u20b925,00,000",
+                "policyTerm": "10",
+                "paymentFrequency": "Monthly",
+                "riders": "Accidental Death Benefit",
+                "riskyHobbies": "No",
+                "preExistingConditions": "No"
+             }
+            
             For insurance-related conversations, follow this IMPORTANT PROCESS only AFTER the user brings up life insurance or health insurance:
             1. NEVER ask for personal information from the user - all user details are already stored in their profile from onboarding
             2. When the user asks about insurance, use ONLY their existing profile information - DO NOT ask for age, gender, health status, etc.

@@ -7,6 +7,8 @@ import { ClaimsTab } from "./dashboard/ClaimsTab";
 import { SessionManager } from "./dashboard/SessionManager";
 import { getUserUUID } from "../utils/uuid";
 import { useAuth } from "@/lib/useAuth";
+import { useWallet } from "@aptos-labs/wallet-adapter-react";
+import { blockchainService } from "../utils/blockchainService";
 import { 
   getUserData, 
   createSession, 
@@ -20,6 +22,7 @@ import {
 
 export function Dashboard() {
   const { user, authenticated, loading: authLoading } = useAuth();
+  const { account } = useWallet();
   const [userData, setUserData] = useState<Record<string, any> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +74,27 @@ export function Dashboard() {
         const userInfo = user || await getUserData(userId);
         setUserData(userInfo);
         
+        // If wallet is connected, verify or create wallet mapping
+        if (account?.address && userInfo?.uuid) {
+          try {
+            // Check if wallet is already mapped
+            const mappingResult = await blockchainService.verifyWallet(userInfo.uuid, account.address);
+            
+            // If not mapped, create mapping
+            if (!mappingResult.success) {
+              await blockchainService.createWalletMapping(userInfo.uuid, account.address);
+              console.log("Created new wallet mapping");
+            } else {
+              console.log("Wallet mapping verified");
+            }
+            
+            // After successful wallet mapping or verification, fetch policies
+            fetchUserPolicies(account.address);
+          } catch (err) {
+            console.error("Error with wallet mapping:", err);
+          }
+        }
+        
         // Fetch or create a session
         await fetchOrCreateSession(userId);
       } catch (err) {
@@ -82,7 +106,34 @@ export function Dashboard() {
     };
 
     fetchUserData();
-  }, [user, authenticated, authLoading]);
+  }, [user, authenticated, authLoading, account?.address]);
+
+  // Add function to fetch user policies
+  const fetchUserPolicies = async (walletAddress: string) => {
+    try {
+      const result = await blockchainService.getUserPolicies(walletAddress);
+      
+      if (result.success && result.data?.policies) {
+        // Map blockchain policies to the PolicyCard format
+        const formattedPolicies = result.data.policies.map((policy: any) => ({
+          id: policy.policy_id,
+          name: policy.policy_type,
+          coverage: `$${policy.coverage_amount?.toLocaleString()}`,
+          premium: `$${policy.premium_amount?.toLocaleString()}/year`,
+          status: policy.status || "Active",
+          details: [
+            { label: "Start Date", value: policy.start_date || "N/A" },
+            { label: "End Date", value: policy.end_date || "N/A" },
+            { label: "Policy Type", value: policy.policy_type || "Standard" }
+          ]
+        }));
+        
+        setPolicies(formattedPolicies);
+      }
+    } catch (error) {
+      console.error("Error fetching policies:", error);
+    }
+  };
 
   const fetchOrCreateSession = async (userId: string) => {
     try {
@@ -494,11 +545,11 @@ export function Dashboard() {
             )}
             
             {activeTab === "policies" && (
-              <PoliciesTab policies={policies} />
+              <PoliciesTab userId={user?.uuid || ""} />
             )}
             
             {activeTab === "claims" && (
-              <ClaimsTab policies={policies} setActiveTab={setActiveTab} />
+              <ClaimsTab userId={user?.uuid || ""} />
             )}
           </>
         )}

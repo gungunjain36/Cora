@@ -3,10 +3,12 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 import uvicorn
+import os
+from dotenv import load_dotenv
 from routes.agent_routes import router as agent_router
 from routes.user_routes import router as user_router
 from routes.session_routes import router as session_router
-
+from routes.blockchain_routes import router as blockchain_router
 # Create FastAPI instance
 app = FastAPI(
     title="Cora Insurance API",
@@ -27,6 +29,7 @@ app.add_middleware(
 app.include_router(agent_router)
 app.include_router(user_router)
 app.include_router(session_router)
+app.include_router(blockchain_router)
 
 # Root endpoint
 @app.get("/")
