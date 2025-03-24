@@ -1,0 +1,214 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom color variables for Cora theme */
+:root {
+  --cora-primary: #3CB371; /* Medium Sea Green */
+  --cora-secondary: #8A2BE2; /* Blue Violet */
+  --cora-dark: #0d1117; /* Dark background */
+  --cora-darker: #080C11; /* Darker shade */
+  --cora-light: #F8F9FA; /* Light text */
+  --cora-gray: #6C757D; /* Gray text */
+  --cora-success: #198754; /* Success green */
+  --cora-warning: #FFC107; /* Warning yellow */
+  --cora-danger: #DC3545; /* Danger red */
+  --cora-info: #0DCAF0; /* Info blue */
+  --navbar-height: 4rem; /* 64px, same as h-16 */
+}
+
+/* Base styles */
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-[#0d1117] text-cora-light;
+  font-family: 'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Nav spacing */
+.below-navbar {
+  padding-top: var(--navbar-height);
+}
+
+/* Main content container */
+.main-content {
+  min-height: calc(100vh - var(--navbar-height));
+  padding-top: var(--navbar-height);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-white/10 rounded-full;
+  border: 2px solid transparent;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-white/20;
+}
+
+/* Add all animation keyframes */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(30px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-30px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pulse {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(0.95); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -1000px 0; }
+  100% { background-position: 1000px 0; }
+}
+
+@keyframes glow {
+  0% { box-shadow: 0 0 5px rgba(60, 179, 113, 0.5); }
+  50% { box-shadow: 0 0 20px rgba(60, 179, 113, 0.8); }
+  100% { box-shadow: 0 0 5px rgba(60, 179, 113, 0.5); }
+}
+
+@keyframes gradientMove {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* Animation utility classes */
+.animate-fadeIn {
+  animation: fadeIn 0.5s ease-out forwards;
+}
+
+.animate-slideInRight {
+  animation: slideInRight 0.5s ease-out forwards;
+}
+
+.animate-slideInLeft {
+  animation: slideInLeft 0.5s ease-out forwards;
+}
+
+.animate-pulse-custom {
+  animation: pulse 2s infinite ease-in-out;
+}
+
+.shimmer {
+  background: linear-gradient(90deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.03) 100%);
+  background-size: 1000px 100%;
+  animation: shimmer 2s infinite linear;
+}
+
+.animate-glow {
+  animation: glow 2s infinite ease-in-out;
+}
+
+.gradient-move {
+  background-size: 200% 200%;
+  animation: gradientMove 3s ease infinite;
+}
+
+/* Custom classes for Cora UI */
+.cora-card {
+  @apply backdrop-blur-xl bg-black/30 rounded-2xl border border-white/10 shadow-xl transition-all duration-300;
+}
+
+.cora-card:hover {
+  @apply border-white/20 shadow-cora-primary/10;
+}
+
+.cora-button {
+  @apply px-4 py-2 bg-gradient-to-r from-cora-primary to-purple-600 text-white rounded-xl 
+         hover:shadow-lg hover:shadow-cora-primary/20 transition-all duration-200 
+         transform hover:scale-105;
+}
+
+.cora-button-outline {
+  @apply px-4 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-gray-300 
+         transition-all border border-white/10 hover:border-white/20
+         hover:text-white;
+}
+
+.cora-input {
+  @apply w-full bg-white/5 border border-white/10 rounded-xl py-2 px-3 
+         text-white placeholder-gray-500 focus:outline-none focus:ring-2 
+         focus:ring-cora-primary focus:border-transparent transition-all;
+}
+
+.cora-label {
+  @apply block text-sm font-medium text-gray-300 mb-1;
+}
+
+/* Mobile responsiveness helpers */
+@media (max-width: 768px) {
+  .mobile-full-width {
+    width: 100vw;
+    margin-left: calc(-50vw + 50%);
+  }
+  
+  .mobile-bottom-padding {
+    padding-bottom: 5rem; /* Space for mobile nav */
+  }
+}
+
+/* Responsive typography */
+@media (max-width: 640px) {
+  h1 { @apply text-2xl; }
+  h2 { @apply text-xl; }
+  h3 { @apply text-lg; }
+}
+
+/* Utility classes for grid layouts */
+.auto-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+/* Glass morphism effect */
+.glass {
+  background: rgba(25, 29, 43, 0.5);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Gradient text */
+.gradient-text {
+  @apply bg-clip-text text-transparent bg-gradient-to-r from-cora-primary to-purple-600;
+}
+
+/* Status indicators */
+.status-active {
+  @apply bg-green-900/30 text-green-400 border border-green-500/20;
+}
+
+.status-pending {
+  @apply bg-yellow-900/30 text-yellow-400 border border-yellow-500/20;
+}
+
+.status-expired {
+  @apply bg-red-900/30 text-red-400 border border-red-500/20;
+} 

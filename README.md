@@ -1,123 +1,179 @@
-# Cora
+# Cora Insurance System
 
-## Overview
+Cora is a comprehensive insurance platform that combines AI-powered insurance agents with blockchain-based policy management. This system offers users personalized insurance recommendations, automated policy creation, and secure claims processing through a modern, user-friendly interface.
 
-We have often seen life insurance scams in India. We are trying to build a platform that uses blockchain to make life insurance more transparent and secure. We have thought that AI Agents can be used to verify the authenticity of the documents and claims. And post that the claims can be settled onchain. All the premiums will be collected in the escrow account and the claim amount will be transferred to the beneficiary after the verification. The platform will be a web app that will be used by the insurance agents and the customers. 
-The workflow will be as follows - 
+## System Architecture
 
-There will be a central voice agent, we are calling it Cora, our communication agent. She will be the one who will talk to the user and based on the user's response, she will call the appropriate next level agent. SO the user can talk and interact with the platform using voice. THey can tell whatever plans they want to buy, and Cora will call the appropriate next level agent to get the details. 
+The Cora Insurance System consists of several key components:
 
-The next level agents will be - 
+1. **Backend AI System** 
+   - Policy recommendation agent
+   - Risk assessment agent
+   - Premium calculation agent
+   - Communication agent
+   - Aptos blockchain agent
 
-1. Policy Recommendation Agent - This agent will be able to recommend the policy based on the users profile and the users needs.
-2. Risk Assessment Agent - This agent will be able to assess the risk associated with the policy.
-3. Premium Calculation Agent - This agent will be able to calculate the premium based on the risk assessment.
+2. **Blockchain Infrastructure**
+   - Smart contracts for policy registry
+   - Smart contracts for claims management
+   - Wallet integration 
 
-Each of these agents will be able to talk to the user and get the details. They will be able to call the next level agent and get the details. They will be able to call the previous level agent and get the details.
+3. **Frontend Interface**
+   - User dashboard
+   - Policy management
+   - Claims processing
+   - AI chat interface
 
-Now, once this is done, the user will be able to buy the policy. The policy will be a onchain policy. The policy will be stored onchain and the policy details will be available to the user. The user will be able to see the policy details, the premium details, the claim details, the payout details, etc. The user will be able to download the policy document and the claim document. It will basically be onchain version of the policy document and the claim document. 
+## Backend-Blockchain Integration
 
-Later, the user can comeback and file the claim. The claim will be verified by the verification agent and then the claim amount will be transferred to the beneficiary.
+The integration between the backend AI system and the Aptos blockchain is handled through the following components:
 
-## Blockchain Implementation
+### `AptosAgent` (`backend/agents/aptos_agent.py`)
 
-We'll use a hybrid approach - storing critical data onchain and non-critical data offchain:
+This agent serves as the bridge between the backend system and the blockchain. It provides methods for:
 
-**Onchain Storage:**
-- Policy hashes and identifiers
-- Premium payment records
-- Claim status and payouts
-- Smart contract logic for escrow and settlements
+- User registration
+- Policy creation
+- Premium payment processing
+- Claim submission and tracking
 
-**Offchain Storage:**
-- Detailed user information (PII data)
-- Full policy documents
-- Medical records and verification documents
-- AI agent interaction history
+### Blockchain API Routes (`backend/routes/blockchain_routes.py`)
 
-### Smart Contracts
+These FastAPI routes expose blockchain operations through a RESTful API, allowing the frontend to interact with the blockchain through simple HTTP requests.
 
-1. **PolicyRegistry Contract**
-   - Manages policy registration and status
-   - Stores minimal policy data (ID, holder address, coverage amount, premium amount)
-   - Maps policies to their offchain document hashes
+### Blockchain Manager (`aptos/scripts/main.ts`)
 
-2. **PremiumEscrow Contract**
-   - Handles premium collection and escrow management
-   - Tracks payment history and policy status
-   - Manages funds allocation
+A TypeScript utility for managing blockchain operations, including:
 
-3. **ClaimProcessor Contract**
-   - Processes claim verification results
-   - Executes payouts to beneficiaries
-   - Maintains claim history and status
+- Account management
+- Transaction payload creation
+- Resource retrieval from the blockchain
 
-### Data Structures
+### CLI Tool (`aptos/scripts/cli.ts`)
 
-**Onchain:**
-- PolicyRecord
-  - id: u64
-  - policyholder_address: address
-  - coverage_amount: u64
-  - premium_amount: u64
-  - active_status: bool
-  - document_hash: vector<u8>
+A command-line interface for direct interaction with the blockchain components, useful for testing and development.
 
-- PremiumPayment
-  - policy_id: u64
-  - amount: u64
-  - timestamp: u64
-  - payment_status: bool
+## Setup and Usage
 
-- ClaimRecord
-  - id: u64
-  - policy_id: u64
-  - beneficiary_address: address
-  - claim_amount: u64
-  - claim_status: u8 (enum: Pending, Verified, Rejected, Paid)
-  - verification_hash: vector<u8>
+### Prerequisites
 
-**Offchain (Secure Database):**
-- User profiles and KYC information
-- Detailed policy terms and conditions
-- Medical records and risk assessment data
-- Claim documentation and evidence
-- AI verification logs and audit trails
+- Python 3.8+
+- Node.js 14+
+- Aptos CLI
+- FastAPI
+- React
 
-This approach minimizes onchain storage costs while maintaining the security and transparency benefits of blockchain for the most critical aspects of the insurance process.
+### Installation
 
-## Tech Stack
+1. **Clone the repository**
 
-- ReactJS
-- AI Agents - Langchain / LlamaIndex
-- Blockchain - Aptos
-- Smart Contracts - Move
-- Escrow - Aptos
-- Offchain Storage - IPFS for documents, PostgreSQL for structured data
+```bash
+git clone https://github.com/yourusername/cora-insurance.git
+cd cora-insurance
+```
 
-## Architecture
+2. **Install backend dependencies**
 
-We are using Aptos blockchain for this project. The smart contracts are written in Move. The frontend is built using ReactJS and the backend is built using FastAPI. The AI Agents are built using Langchain and LlamaIndex. For now the AI agents will verify based on the synthetic data generated by the backend. Once on production the AI agents will verify based on the real data that is available on the internet and the data from the policyholders provided we get the approval from the policyholders and the government agencies.
+```bash
+cd backend
+pip install -r requirements.txt
+```
 
-### Frontend
+3. **Install frontend and blockchain dependencies**
 
-The frontend is built using ReactJS. It is a web app that will be used by the insurance agents and the customers. The app will be a single page app that will be used by the insurance agents and the customers. The app will be responsive and will be available on the web and mobile.
+```bash
+cd ../aptos
+npm install
+```
 
-### Backend
+### Configuration
 
-The backend is built using FastAPI. It is a REST API that will be used by the frontend and the AI agents. The backend will be responsible for generating the synthetic data and the real data from the internet and the data from the policyholders.
+Create a `.env` file in the root directory with the following variables:
 
-### Smart Contracts
+```
+# Aptos Network Settings
+APTOS_NODE_URL=https://fullnode.devnet.aptoslabs.com/v1
+APTOS_FAUCET_URL=https://faucet.devnet.aptoslabs.com
+NETWORK=devnet
+CONTRACT_ADDRESS=your_contract_address
+ADMIN_PRIVATE_KEY=your_private_key
 
-The smart contracts are written in Move. They are responsible for the logic of the escrow and the claim settlement.
+# Backend Settings
+API_KEY=your_backend_api_key
+OPENAI_API_KEY=your_openai_api_key
+```
 
-## Multi Agent System - 
+### Running the Backend
 
-### Top Level Agent - Communication Agent
+```bash
+cd backend
+uvicorn main:app --reload
+```
 
-### Next Level Agents - 
+### Running the Frontend
 
-1. Policy Recommendation Agent (talks to Communication Agent and tells the user about the policy based on the results from the Risk Assessment Agent and the Premium Calculation Agent)
+```bash
+cd aptos/frontend
+npm run dev
+```
 
-2. Risk Assessment Agent (talks to Policy Recommendation Agent)
-3. Premium Calculation Agent (talks to Policy Recommendation Agent)
+## Blockchain CLI Usage
+
+The CLI tool provides a convenient way to interact with the blockchain:
+
+```bash
+# Check balance of an address
+node aptos/scripts/cli.ts balance <address>
+
+# Fund an account with test tokens (devnet only)
+node aptos/scripts/cli.ts fund <address> --amount 100000000
+
+# Register a new user
+node aptos/scripts/cli.ts register-user --name "John Doe" --email "john@example.com" --wallet <wallet_address>
+
+# Create a policy
+node aptos/scripts/cli.ts create-policy --user-id <user_id> --policy-type "Term Life" --coverage 5000000 --premium 12500
+
+# Get policies for a user
+node aptos/scripts/cli.ts get-policies <wallet_address>
+
+# Submit a claim
+node aptos/scripts/cli.ts submit-claim --policy-id <policy_id> --amount 2500 --reason "Medical expenses"
+```
+
+## API Endpoints
+
+The backend system exposes the following blockchain-related endpoints:
+
+- `POST /wallet-mapping`: Map a user ID to a wallet address
+- `GET /verify-wallet/{user_id}/{wallet_address}`: Verify wallet mapping
+- `POST /register-user`: Register a new user
+- `POST /create-policy`: Create a new insurance policy
+- `GET /user-policies/{wallet_address}`: Get policies for a user
+- `GET /policy-details/{policy_id}`: Get details of a specific policy
+- `POST /process-payment`: Process a premium payment
+- `POST /submit-claim`: Submit an insurance claim
+- `GET /claim-status/{claim_id}`: Get the status of a claim
+
+## Architecture Diagram
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│                 │     │                 │     │                 │
+│  Frontend UI    │◄────►  Backend API    │◄────►  Aptos          │
+│  (React)        │     │  (FastAPI)      │     │  Blockchain     │
+│                 │     │                 │     │                 │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                              ▲
+                              │
+                              ▼
+                       ┌─────────────────┐
+                       │                 │
+                       │  AI Agents      │
+                       │                 │
+                       └─────────────────┘
+```
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.

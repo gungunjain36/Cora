@@ -1,2 +1,13 @@
 venv
 .env
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+node_modules
+Users
+sessions
+Aptos_Cli.md

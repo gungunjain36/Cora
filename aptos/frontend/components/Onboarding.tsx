@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useWallet } from "@aptos-labs/wallet-adapter-react";
+import { getUserUUID } from "../utils/uuid";
+import { registerUser } from "../utils/api";
+import { useAuth } from "@/lib/useAuth";
 
 type OnboardingStep = {
   id: string;
@@ -203,8 +205,9 @@ export function Onboarding() {
   const [currentStep, setCurrentStep] = useState(0);
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [showTooltip, setShowTooltip] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const navigate = useNavigate();
-  const { account } = useWallet();
+  const { user, navigateByAuthState } = useAuth();
 
   const handleInputChange = (fieldId: string, value: string) => {
     setFormData((prev) => ({
@@ -231,14 +234,44 @@ export function Onboarding() {
       setCurrentStep(currentStep + 1);
       window.scrollTo(0, 0);
     } else {
-      // Submit the form data
-      console.log("Form data submitted:", {
-        ...formData,
-        walletAddress: account?.address,
-      });
+      submitFormData();
+    }
+  };
+
+  const submitFormData = async () => {
+    try {
+      setIsSubmitting(true);
+      
+      // Use the Privy user ID from the auth context instead of generating a new UUID
+      const userUUID = user?.uuid || getUserUUID();
+      
+      // Process form data to ensure proper types
+      const processedFormData: Record<string, any> = {};
+      for (const key in formData) {
+        // Ensure string values for all fields to avoid validation issues
+        processedFormData[key] = String(formData[key]);
+      }
+      
+      // Prepare complete user data with UUID
+      const userData = {
+        uuid: userUUID,
+        walletAddress: user?.walletAddress || "",
+        ...processedFormData
+      };
+      
+      console.log("Submitting user data with UUID:", userData);
+      
+      // Send data to the backend using the API utility
+      const result = await registerUser(userData);
+      console.log("User registration successful:", result);
       
       // Navigate to dashboard
       navigate("/dashboard");
+    } catch (error) {
+      console.error("Error submitting user data:", error);
+      alert("Failed to submit your information. Please try again.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -293,6 +326,7 @@ export function Onboarding() {
                         className="text-gray-400 hover:text-gray-300"
                         onMouseEnter={() => toggleTooltip(field.id)}
                         onMouseLeave={() => toggleTooltip(null)}
+                        aria-label={`Show tooltip for ${field.label}`}
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                           <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />

@@ -7,10 +7,12 @@ module cora_insurance_addr::policy_registry {
     use aptos_framework::event::{Self, EventHandle};
 
     /// Error codes
-    const E_NOT_AUTHORIZED: u64 = 1;
-    const E_POLICY_ALREADY_EXISTS: u64 = 2;
-    const E_POLICY_DOES_NOT_EXIST: u64 = 3;
-    const E_POLICY_NOT_ACTIVE: u64 = 4;
+    const E_NOT_AUTHORIZED: u64 = 0x50001;
+    const E_POLICY_ALREADY_EXISTS: u64 = 0x50002;
+    const E_POLICY_DOES_NOT_EXIST: u64 = 0x50003;
+    const E_POLICY_NOT_ACTIVE: u64 = 0x50004;
+    const E_ADMIN_ALREADY_EXISTS: u64 = 0x50005;
+    const E_ADMIN_DOES_NOT_EXIST: u64 = 0x50006;
 
     /// Policy status enum
     const POLICY_STATUS_ACTIVE: u8 = 0;
@@ -47,6 +49,11 @@ module cora_insurance_addr::policy_registry {
         new_status: u8,
     }
 
+    /// Resource to store authorized administrators
+    struct AuthorizedAdmins has key {
+        admins: vector<address>,
+    }
+
     /// Resource to store policy data and events
     struct PolicyStore has key {
         policies: vector<PolicyRecord>,
@@ -69,6 +76,95 @@ module cora_insurance_addr::policy_registry {
             policy_created_events: account::new_event_handle<PolicyCreatedEvent>(admin),
             policy_status_updated_events: account::new_event_handle<PolicyStatusUpdatedEvent>(admin),
         });
+
+        // Create and move the AuthorizedAdmins resource
+        let admin_list = vector::empty<address>();
+        vector::push_back(&mut admin_list, admin_addr); // Add module publisher as an admin
+        
+        move_to(admin, AuthorizedAdmins {
+            admins: admin_list,
+        });
+    }
+
+    /// Check if an address is an authorized admin
+    fun is_authorized_admin(addr: address): bool acquires AuthorizedAdmins {
+        // The module publisher is always authorized
+        if (addr == @cora_insurance_addr) {
+            return true
+        };
+        
+        // Check if the address is in the authorized admins list
+        let auth_admins = borrow_global<AuthorizedAdmins>(@cora_insurance_addr);
+        let i = 0;
+        let len = vector::length(&auth_admins.admins);
+        
+        while (i < len) {
+            if (vector::borrow(&auth_admins.admins, i) == &addr) {
+                return true
+            };
+            i = i + 1;
+        };
+        
+        false
+    }
+
+    /// Add a new authorized admin
+    public entry fun add_authorized_admin(
+        admin: &signer,
+        new_admin_addr: address
+    ) acquires AuthorizedAdmins {
+        let admin_addr = signer::address_of(admin);
+        
+        // Only the module publisher can add new admins
+        assert!(admin_addr == @cora_insurance_addr, error::permission_denied(E_NOT_AUTHORIZED));
+        
+        let auth_admins = borrow_global_mut<AuthorizedAdmins>(@cora_insurance_addr);
+        
+        // Ensure the admin is not already in the list
+        let i = 0;
+        let len = vector::length(&auth_admins.admins);
+        
+        while (i < len) {
+            assert!(vector::borrow(&auth_admins.admins, i) != &new_admin_addr, 
+                   error::already_exists(E_ADMIN_ALREADY_EXISTS));
+            i = i + 1;
+        };
+        
+        // Add the new admin
+        vector::push_back(&mut auth_admins.admins, new_admin_addr);
+    }
+
+    /// Remove an authorized admin
+    public entry fun remove_authorized_admin(
+        admin: &signer,
+        admin_to_remove: address
+    ) acquires AuthorizedAdmins {
+        let admin_addr = signer::address_of(admin);
+        
+        // Only the module publisher can remove admins
+        assert!(admin_addr == @cora_insurance_addr, error::permission_denied(E_NOT_AUTHORIZED));
+        
+        // Cannot remove the module publisher
+        assert!(admin_to_remove != @cora_insurance_addr, error::invalid_argument(E_NOT_AUTHORIZED));
+        
+        let auth_admins = borrow_global_mut<AuthorizedAdmins>(@cora_insurance_addr);
+        
+        // Find and remove the admin
+        let i = 0;
+        let len = vector::length(&auth_admins.admins);
+        let found = false;
+        
+        while (i < len) {
+            if (vector::borrow(&auth_admins.admins, i) == &admin_to_remove) {
+                vector::remove(&mut auth_admins.admins, i);
+                found = true;
+                break
+            };
+            i = i + 1;
+        };
+        
+        // Ensure the admin was in the list
+        assert!(found, error::not_found(E_ADMIN_DOES_NOT_EXIST));
     }
 
     /// Create a new policy
@@ -79,11 +175,11 @@ module cora_insurance_addr::policy_registry {
         premium_amount: u64,
         document_hash: vector<u8>,
         duration_in_days: u64,
-    ) acquires PolicyStore {
+    ) acquires PolicyStore, AuthorizedAdmins {
         let admin_addr = signer::address_of(admin);
         
-        // Check if the caller is authorized
-        assert!(admin_addr == @cora_insurance_addr, error::permission_denied(E_NOT_AUTHORIZED));
+        // Check if the caller is authorized (either module publisher or authorized admin)
+        assert!(is_authorized_admin(admin_addr), error::permission_denied(E_NOT_AUTHORIZED));
         
         let policy_store = borrow_global_mut<PolicyStore>(@cora_insurance_addr);
         let policy_id = policy_store.next_policy_id;
@@ -107,9 +203,6 @@ module cora_insurance_addr::policy_registry {
         // Add the policy to the store
         vector::push_back(&mut policy_store.policies, policy);
         
-        // Increment the next policy ID
-        policy_store.next_policy_id = policy_id + 1;
-        
         // Emit policy created event
         event::emit_event(&mut policy_store.policy_created_events, PolicyCreatedEvent {
             id: policy_id,
@@ -120,6 +213,9 @@ module cora_insurance_addr::policy_registry {
             start_time,
             end_time,
         });
+        
+        // Increment the policy ID for the next policy
+        policy_store.next_policy_id = policy_id + 1;
     }
 
     /// Update policy status
@@ -127,11 +223,11 @@ module cora_insurance_addr::policy_registry {
         admin: &signer,
         policy_id: u64,
         new_status: u8,
-    ) acquires PolicyStore {
+    ) acquires PolicyStore, AuthorizedAdmins {
         let admin_addr = signer::address_of(admin);
         
-        // Check if the caller is authorized
-        assert!(admin_addr == @cora_insurance_addr, error::permission_denied(E_NOT_AUTHORIZED));
+        // Check if the caller is authorized (either module publisher or authorized admin)
+        assert!(is_authorized_admin(admin_addr), error::permission_denied(E_NOT_AUTHORIZED));
         
         let policy_store = borrow_global_mut<PolicyStore>(@cora_insurance_addr);
         
@@ -228,4 +324,4 @@ module cora_insurance_addr::policy_registry {
     public fun init_for_testing(admin: &signer) {
         init_module(admin);
     }
-} 
+}
