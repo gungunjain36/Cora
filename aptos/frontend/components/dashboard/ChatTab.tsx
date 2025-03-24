@@ -1,5 +1,7 @@
 import { Message } from "./types";
 import { useRef, useEffect } from "react";
+import { Policy } from "../../view-functions/policyService";
+import { toast } from "react-hot-toast";
 
 type ChatTabProps = {
   messages: Message[];
@@ -8,6 +10,10 @@ type ChatTabProps = {
   setInputValue: (value: string) => void;
   handleSendMessage: () => void;
   handleKeyPress: (e: React.KeyboardEvent) => void;
+  handleAcceptPolicy?: (policy: any) => void;
+  handleRejectPolicy?: () => void;
+  handlePayPremium?: (policyId: string) => void;
+  handleFileClaim?: (policyId: string) => void;
 };
 
 export function ChatTab({
@@ -16,7 +22,11 @@ export function ChatTab({
   inputValue,
   setInputValue,
   handleSendMessage,
-  handleKeyPress
+  handleKeyPress,
+  handleAcceptPolicy,
+  handleRejectPolicy,
+  handlePayPremium,
+  handleFileClaim
 }: ChatTabProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
@@ -30,9 +40,187 @@ export function ChatTab({
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
+  // Check if a message contains a policy recommendation
+  const hasPolicyRecommendation = (text: string) => {
+    // Check for both frontend and backend formats
+    return (text.includes("POLICY_RECOMMENDATION") && text.includes("coverageAmount") && text.includes("premiumAmount")) || 
+           (text.includes("policy_type") && text.includes("coverage_amount") && text.includes("term_length"));
+  };
+
+  // Extract policy data from message text
+  const extractPolicyData = (text: string) => {
+    try {
+      // First check for frontend format
+      if (text.includes("POLICY_RECOMMENDATION")) {
+        const policyJson = text.substring(
+          text.indexOf("POLICY_RECOMMENDATION") + "POLICY_RECOMMENDATION".length
+        );
+        return JSON.parse(policyJson);
+      }
+      
+      // Check for backend format (JSON enclosed in curly braces)
+      const jsonMatch = text.match(/\{[\s\S]*"policy_type"[\s\S]*"coverage_amount"[\s\S]*"term_length"[\s\S]*\}/);
+      if (jsonMatch) {
+        const policyJson = jsonMatch[0];
+        const parsedPolicy = JSON.parse(policyJson);
+        
+        // Convert backend format to frontend format
+        return {
+          coverageAmount: parsedPolicy.coverage_amount,
+          premiumAmount: parsedPolicy.premium_amount || parsedPolicy.premium || 0,
+          termLength: parsedPolicy.term_length
+        };
+      }
+      
+      return null;
+    } catch (e) {
+      console.error("Failed to parse policy data:", e);
+      return null;
+    }
+  };
+  
+  // Format policy details for display
+  const formatPolicyDetails = (policy: any) => {
+    return (
+      <div className="bg-black/40 p-3 rounded-md mt-2 border border-cora-primary/30">
+        <div className="text-sm font-semibold text-cora-primary mb-1">Policy Details</div>
+        <div className="grid grid-cols-2 gap-1 text-xs">
+          <div>Coverage Amount:</div>
+          <div>${policy.coverageAmount?.toLocaleString()}</div>
+          <div>Premium Amount:</div>
+          <div>${policy.premiumAmount?.toLocaleString()}/year</div>
+          <div>Term Length:</div>
+          <div>{policy.termLength || 1} year(s)</div>
+        </div>
+      </div>
+    );
+  };
+
   // Helper function to render message content with formatting
-  const renderMessageContent = (text: string) => {
-    return text;
+  const renderMessageContent = (message: Message) => {
+    // Check if this message contains a policy recommendation
+    if (message.sender === "agent" && hasPolicyRecommendation(message.text)) {
+      const policyData = extractPolicyData(message.text);
+      const cleanText = message.text.substring(0, message.text.indexOf("POLICY_RECOMMENDATION"));
+      
+      if (policyData) {
+        return (
+          <>
+            <p className="text-sm whitespace-pre-wrap">{cleanText}</p>
+            
+            {formatPolicyDetails(policyData)}
+            
+            <div className="flex space-x-2 mt-3">
+              <button 
+                onClick={() => handleAcceptPolicy && handleAcceptPolicy(policyData)}
+                className="bg-cora-primary text-white px-3 py-1 text-xs rounded-full  transition-colors"
+              >
+                Accept Policy
+              </button>
+              <button 
+                onClick={() => handleRejectPolicy && handleRejectPolicy()}
+                className="bg-black/30 text-white/80 px-3 py-1 text-xs rounded-full hover:bg-black/50 transition-colors"
+              >
+                Reject
+              </button>
+            </div>
+          </>
+        );
+      }
+    }
+    
+    // Check if this message contains a prompt to pay premium
+    if (message.sender === "agent" && message.text.includes("PAY_PREMIUM_PROMPT:")) {
+      const parts = message.text.split("PAY_PREMIUM_PROMPT:");
+      let policyId = parts[1]?.trim();
+      
+      console.log("Raw policy ID from message:", policyId);
+      
+      // Extract any numeric part from the policy ID or generate a new one
+      let numericPolicyId;
+      if (policyId) {
+        // Extract just the numeric part 
+        const match = policyId.match(/\d+/);
+        if (match) {
+          numericPolicyId = parseInt(match[0], 10);
+          console.log("Extracted numeric policy ID:", numericPolicyId);
+        } else if (policyId.startsWith("0x")) {
+          // Don't use wallet addresses as policy IDs
+          console.error("Cannot use wallet address as policy ID");
+          toast.error("Invalid policy ID format");
+          return (
+            <p className="text-sm whitespace-pre-wrap">{parts[0]} <span className="text-red-400">(Error: Invalid policy ID)</span></p>
+          );
+        } else {
+          // Try to convert directly to a number
+          numericPolicyId = parseInt(policyId, 10);
+          
+          // Final validation check - if we can't convert to number, show error
+          if (isNaN(numericPolicyId)) {
+            console.error("Invalid policy ID - not a number:", policyId);
+            toast.error("Invalid policy ID format");
+            return (
+              <p className="text-sm whitespace-pre-wrap">{parts[0]} <span className="text-red-400">(Error: Invalid policy ID)</span></p>
+            );
+          }
+        }
+      } else {
+        // No policy ID found - show error
+        console.error("No policy ID found in message");
+        toast.error("No policy ID found");
+        return (
+          <p className="text-sm whitespace-pre-wrap">{parts[0]} <span className="text-red-400">(Error: No policy ID found)</span></p>
+        );
+      }
+      
+      console.log("Final numeric policy ID to be used:", numericPolicyId);
+      
+      return (
+        <>
+          <p className="text-sm whitespace-pre-wrap">{parts[0]}</p>
+          
+          <div className="mt-3">
+            <button 
+              onClick={() => {
+                console.log("Pay Premium button clicked with policy ID:", numericPolicyId);
+                handlePayPremium && handlePayPremium(numericPolicyId.toString());
+              }}
+              className="bg-blue-500 text-white px-3 py-1 text-xs rounded-full hover:bg-blue-600 transition-colors"
+            >
+              Pay Premium
+            </button>
+          </div>
+        </>
+      );
+    }
+    
+    // Check if this message contains a prompt to file a claim
+    if (message.sender === "agent" && message.text.includes("FILE_CLAIM_PROMPT:")) {
+      const parts = message.text.split("FILE_CLAIM_PROMPT:");
+      const policyId = parts[1]?.trim();
+      
+      return (
+        <>
+          <p className="text-sm whitespace-pre-wrap">{parts[0]}</p>
+          
+          {policyId && (
+            <div className="mt-3">
+              <button 
+                onClick={() => handleFileClaim && handleFileClaim(policyId)}
+                className="bg-amber-500 text-white px-3 py-1 text-xs rounded-full hover:bg-amber-600 transition-colors"
+              >
+                File Claim
+              </button>
+            </div>
+          )}
+        </>
+      );
+    }
+    
+    // Default rendering for regular messages
+    return (
+      <p className="text-sm whitespace-pre-wrap">{message.text}</p>
+    );
   };
 
   return (
@@ -51,7 +239,7 @@ export function ChatTab({
               className={`max-w-[80%] rounded-xl p-3 ${
                 message.sender === "agent"
                   ? "bg-black/60 border border-white/10 text-white rounded-tl-sm"
-                  : "bg-gradient-to-r from-cora-primary to-cora-secondary text-white rounded-tr-sm"
+                  : "bg-cora-primary text-white rounded-tr-sm"
               }`}
             >
               {message.sender === "agent" && (
@@ -62,7 +250,7 @@ export function ChatTab({
                   <p className="text-xs font-medium">Cora</p>
                 </div>
               )}
-              <p className="text-sm whitespace-pre-wrap">{renderMessageContent(message.text)}</p>
+              {renderMessageContent(message)}
               <p className="text-[10px] text-right mt-1 opacity-70">
                 {message.timestamp.toLocaleTimeString([], { 
                   hour: '2-digit', 

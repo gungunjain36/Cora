@@ -131,7 +131,8 @@ export function Navbar() {
           )}
           
           {/* Policy Demo Links */}
-          <Link 
+          
+          {/* <Link 
             to="/create-policy-demo" 
             className={`hidden sm:flex items-center transition-all duration-300 relative px-1 py-1 text-sm font-medium ${
               isPolicyDemo ? "text-cora-primary" : "text-cora-light hover:text-cora-primary"
@@ -163,7 +164,7 @@ export function Navbar() {
             {isImprovedPolicyDemo && (
               <span className="absolute bottom-0 left-0 w-full h-0.5 bg-cora-primary"></span>
             )}
-          </Link>
+          </Link> */}
           
           {/* Show Logout button for authenticated users */}
           {authenticated && (

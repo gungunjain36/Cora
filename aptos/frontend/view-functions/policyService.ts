@@ -132,16 +132,42 @@ export const payPremium = async ({
   amount: number;
 }): Promise<{ hash: string }> => {
   try {
+    console.log(`Creating premium payment payload for policy ID: ${policyId} (${typeof policyId}), amount: ${amount}`);
+    
+    // Convert policy ID to a number first
+    let numericPolicyId: number;
+    if (typeof policyId === 'string') {
+      // Extract numbers only if it's a string with additional characters
+      const match = policyId.match(/\d+/);
+      if (match) {
+        numericPolicyId = parseInt(match[0], 10);
+      } else {
+        numericPolicyId = parseInt(policyId, 10);
+      }
+      
+      // If parsing fails or results in NaN, default to a timestamp
+      if (isNaN(numericPolicyId)) {
+        console.error("Could not parse policy ID to number:", policyId);
+        throw new Error("Invalid policy ID format - must be a number");
+      }
+    } else {
+      numericPolicyId = policyId as number;
+    }
+    
+    console.log(`Using numeric policy ID: ${numericPolicyId}`);
+    
     const payload = {
       type: "entry_function_payload",
       function: `${MODULE_ADDRESS}::premium_escrow::pay_premium`,
       type_arguments: [],
       arguments: [
-        policyId.toString(),
+        numericPolicyId,
         amount.toString()
       ]
     };
-
+    
+    console.log("Generated premium payment payload:", JSON.stringify(payload, null, 2));
+    
     return {
       hash: JSON.stringify(payload)
     };

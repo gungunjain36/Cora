@@ -30,10 +30,21 @@ export function Sidebar({
   const formatAddress = (address: any): string => {
     if (!address) return 'Not Connected';
     
+    console.log("Formatting address:", address, "type:", typeof address);
+    
+    // Handle string address format (most common format from the wallet adapter)
     if (typeof address === 'string') {
       return `${address.slice(0, 6)}...${address.slice(-4)}`;
     }
     
+    // Handle address object format with toString() method
+    if (address.toString && typeof address.toString === 'function') {
+      const addressStr = address.toString();
+      console.log("Converted address using toString():", addressStr);
+      return `${addressStr.slice(0, 6)}...${addressStr.slice(-4)}`;
+    }
+    
+    // Handle raw bytes array format
     if (address.data && Array.isArray(address.data)) {
       const hexString = Array.from(address.data)
         .map(b => (typeof b === 'number' ? b.toString(16).padStart(2, '0') : ''))
@@ -147,7 +158,7 @@ export function Sidebar({
             onClick={() => setActiveTab("chat")}
             className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-all duration-300 ${
               activeTab === "chat" 
-                ? "bg-gradient-to-r from-cora-primary to-cora-secondary text-cora-light shadow-lg shadow-cora-primary/20" 
+                ? "bg-cora-primary text-cora-light shadow-lg shadow-cora-primary/20" 
                 : "hover:bg-white/10 text-cora-gray hover:translate-x-1"
             }`}
             aria-label="Chat with Cora"
@@ -162,7 +173,7 @@ export function Sidebar({
             onClick={() => setActiveTab("policies")}
             className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-all duration-300 ${
               activeTab === "policies" 
-                ? "bg-gradient-to-r from-cora-primary to-cora-secondary text-cora-light shadow-lg shadow-cora-primary/20" 
+                ? "bg-cora-primary text-cora-light shadow-lg shadow-cora-primary/20" 
                 : "hover:bg-white/10 text-cora-gray hover:translate-x-1"
             }`}
             aria-label="My Policies"
@@ -178,7 +189,7 @@ export function Sidebar({
             onClick={() => setActiveTab("claims")}
             className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-all duration-300 ${
               activeTab === "claims" 
-                ? "bg-gradient-to-r from-cora-primary to-cora-secondary text-cora-light shadow-lg shadow-cora-primary/20" 
+                ? "bg-cora-primary text-cora-light shadow-lg shadow-cora-primary/20" 
                 : "hover:bg-white/10 text-cora-gray hover:translate-x-1"
             }`}
             aria-label="File a Claim"
@@ -245,8 +256,8 @@ export function Sidebar({
             <p className="text-cora-gray text-xs">Powered by</p>
             <div className="flex justify-center space-x-2 mt-1">
               <span className="text-xs text-cora-primary">Aptos Blockchain</span>
-              <span className="text-xs text-cora-gray">•</span>
-              <span className="text-xs text-cora-secondary">Claude AI</span>
+           
+          
             </div>
           </div>
         </div>

@@ -19,10 +19,22 @@ import {
   getConversationHistory,
   initializeSession
 } from "../utils/api";
+import { 
+  createPolicy, 
+  payPremium, 
+  fileClaim, 
+  getUserPolicies, 
+  getPremiumPaymentStatus,
+  Policy 
+} from "../view-functions/policyService";
+import { Toaster, toast } from 'react-hot-toast';
+
+// Feature flags - control behavior
+const USE_MOCK_POLICY_RECOMMENDATIONS = true; // Set to false to use real backend recommendations
 
 export function Dashboard() {
   const { user, authenticated, loading: authLoading } = useAuth();
-  const { account } = useWallet();
+  const { account, connect, wallets, signAndSubmitTransaction } = useWallet();
   const location = useLocation();
   const [userData, setUserData] = useState<Record<string, any> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -40,21 +52,18 @@ export function Dashboard() {
   const [activeTab, setActiveTab] = useState<"chat" | "policies" | "claims">("chat");
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [userSessions, setUserSessions] = useState<string[]>([]);
-  const [policies, setPolicies] = useState<PolicyCard[]>([
-    {
-      id: "policy-1",
-      name: "Term Life Insurance",
-      coverage: "₹50,00,000",
-      premium: "₹12,500/year",
-      status: "Active" as "Active" | "Pending" | "Expired",
-      details: [
-        { label: "Term Length", value: "20 years" },
-        { label: "Premium Payment", value: "Annual" }
-      ]
-    }
-  ]);
+  const [policies, setPolicies] = useState<Policy[]>([]);
   const [dashboardReady, setDashboardReady] = useState(false);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
+  const [recommendedPolicy, setRecommendedPolicy] = useState<any>(null);
+  const [transactionInProgress, setTransactionInProgress] = useState(false);
+  const [policyStats, setPolicyStats] = useState({
+    totalPolicies: 0,
+    totalCoverage: 0,
+    totalPremiumPaid: 0,
+    activePolicies: 0,
+    totalClaims: 0
+  });
 
   // Parse URL parameters to set the active tab
   useEffect(() => {
@@ -326,6 +335,210 @@ export function Dashboard() {
     setIsTyping(true);
     
     try {
+      // Check for policy-related requests
+      const input = inputValue.toLowerCase();
+      
+      // Handle claim submission if the message starts with the claim prefix
+      if (input.includes("file a claim for policy #") && input.includes("for $")) {
+        // Extract policy ID and amount from message
+        const policyMatch = input.match(/policy #(\d+)/i);
+        const amountMatch = input.match(/\$(\d+)/);
+        
+        if (policyMatch && amountMatch && account?.address) {
+          const policyId = policyMatch[1];
+          const claimAmount = parseInt(amountMatch[1]);
+          const claimReason = input.split("for $")[1].split(".")[1]?.trim() || "Medical expenses";
+          
+          setTransactionInProgress(true);
+          
+          try {
+            // Create claim transaction
+            const result = await fileClaim({
+              policyId,
+              claimantAddress: account.address.toString(),
+              claimAmount,
+              claimReason
+            });
+            
+            // Parse the transaction payload
+            let payload;
+            try {
+              payload = JSON.parse(result.hash);
+            } catch (parseError) {
+              console.error("Failed to parse transaction payload:", parseError);
+              throw new Error("Invalid transaction payload format");
+            }
+            
+            // Submit the transaction
+            const response = await signAndSubmitTransaction({
+              sender: account.address,
+              data: {
+                function: payload.function,
+                functionArguments: payload.arguments,
+                typeArguments: payload.type_arguments || []
+              }
+            });
+            
+            // Add a success message
+            const successMessage: Message = {
+              id: Date.now().toString(),
+              sender: "agent",
+              text: `Your claim has been filed successfully! The transaction hash is: ${response.hash}
+
+We'll review your claim and get back to you within 2-3 business days.`,
+              timestamp: new Date(),
+            };
+            
+            setMessages([...updatedMessages, successMessage]);
+            toast.success("Claim filed successfully!");
+            
+            setTransactionInProgress(false);
+            
+            // Skip regular message processing
+            setIsTyping(false);
+            return;
+          } catch (error) {
+            console.error("Error filing claim:", error);
+            
+            // Add an error message
+            const errorMessage: Message = {
+              id: Date.now().toString(),
+              sender: "agent",
+              text: `I'm sorry, there was an error filing your claim. Please try again.`,
+              timestamp: new Date(),
+            };
+            
+            setMessages([...updatedMessages, errorMessage]);
+            toast.error(`Failed to file claim: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            setIsTyping(false);
+            setTransactionInProgress(false);
+            return;
+          }
+        }
+      }
+
+      // Add a check for policy recommendation requests
+      if ((input.includes("recommend") || input.includes("suggest")) && 
+          (input.includes("policy") || input.includes("insurance"))) {
+        
+        if (USE_MOCK_POLICY_RECOMMENDATIONS) {
+          // Use mock policy recommendations
+          console.log("Using mock policy recommendations instead of backend API");
+          
+          // Create mock policy recommendations
+          const mockPolicies = [
+            {
+              policy_type: "Term Life",
+              coverageAmount: 50000,
+              premiumAmount: 500,
+              termLength: 1,
+              premium: 500
+            },
+            {
+              policy_type: "Whole Life",
+              coverageAmount: 100000,
+              premiumAmount: 1200,
+              termLength: 5,
+              premium: 1200
+            },
+            {
+              policy_type: "Universal Life",
+              coverageAmount: 200000,
+              premiumAmount: 2000,
+              termLength: 10,
+              premium: 2000
+            }
+          ];
+          
+          // Format the recommendation message
+          const recommendationText = `Based on your profile, I've generated these policy recommendations for you:
+          
+1. ${mockPolicies[0].policy_type}: $${mockPolicies[0].coverageAmount.toLocaleString()} coverage, $${mockPolicies[0].premiumAmount}/year
+2. ${mockPolicies[1].policy_type}: $${mockPolicies[1].coverageAmount.toLocaleString()} coverage, $${mockPolicies[1].premiumAmount}/year
+3. ${mockPolicies[2].policy_type}: $${mockPolicies[2].coverageAmount.toLocaleString()} coverage, $${mockPolicies[2].premiumAmount}/year
+
+Here's my top recommendation:`;
+          
+          // Create the recommendation with embedded JSON that the UI can parse
+          const agentMessage: Message = {
+            id: Date.now().toString(),
+            sender: "agent",
+            text: `${recommendationText}POLICY_RECOMMENDATION${JSON.stringify(mockPolicies[0])}`,
+            timestamp: new Date(),
+            isPolicyRecommendation: true
+          };
+          
+          setMessages([...updatedMessages, agentMessage]);
+          setIsTyping(false);
+          
+          // Save the message to the session if needed
+          if (currentSessionId && user?.uuid) {
+            try {
+              await addMessage(user.uuid, currentSessionId, {
+                id: agentMessage.id,
+                sender: agentMessage.sender,
+                text: agentMessage.text,
+                timestamp: agentMessage.timestamp.toISOString()
+              });
+            } catch (err) {
+              console.error("Error saving recommendation message:", err);
+            }
+          }
+          
+          return;
+        } else {
+          // Use the backend API for policy recommendations
+          try {
+            if (!user || !currentSessionId) {
+              throw new Error("No user or session found");
+            }
+            
+            const userUuid = user.uuid || "";
+            
+            // Send the message to the backend agent
+            console.log("Calling backend API for policy recommendations");
+            const response = await sendMessageToAgent(userUuid, inputValue);
+            
+            // Create the agent response message
+            const agentMessage: Message = {
+              id: Date.now().toString(),
+              sender: "agent",
+              text: response.response,
+              timestamp: new Date(),
+            };
+            
+            setMessages([...updatedMessages, agentMessage]);
+            setIsTyping(false);
+            
+            // Add the message to the session in the backend
+            if (currentSessionId) {
+              await addMessage(userUuid, currentSessionId, {
+                id: agentMessage.id,
+                sender: agentMessage.sender,
+                text: agentMessage.text,
+                timestamp: agentMessage.timestamp.toISOString(),
+              });
+            }
+            
+            return;
+          } catch (error) {
+            console.error("Error getting recommendation from backend:", error);
+            
+            const errorMessage: Message = {
+              id: Date.now().toString(),
+              sender: "agent",
+              text: "I'm sorry, I had trouble generating a policy recommendation. Please try again.",
+              timestamp: new Date(),
+            };
+            
+            setMessages([...updatedMessages, errorMessage]);
+            setIsTyping(false);
+            return;
+          }
+        }
+      }
+
+      // Continue with the standard message processing
       if (!user || !currentSessionId) {
         throw new Error("No user or session found");
       }
@@ -541,6 +754,343 @@ export function Dashboard() {
     }
   };
 
+  // Calculate policy statistics when policies change
+  useEffect(() => {
+    if (policies.length > 0) {
+      const stats = {
+        totalPolicies: policies.length,
+        totalCoverage: policies.reduce((sum, policy) => sum + (policy.coverage_amount || 0), 0),
+        totalPremiumPaid: policies.filter(p => p.isPremiumPaid).length * policies[0].premium_amount,
+        activePolicies: policies.filter(p => p.status === 'ACTIVE').length,
+        totalClaims: 0 // This would need to be fetched from the blockchain
+      };
+      setPolicyStats(stats);
+    }
+  }, [policies]);
+
+  // Add these new methods for handling policy recommendations
+  
+  // Handle policy recommendation from agent
+  const handlePolicyRecommendation = (policyData: any) => {
+    setRecommendedPolicy(policyData);
+    // Add a message to inform the user
+    const newMessage: Message = {
+      id: Date.now().toString(),
+      sender: "agent",
+      text: `I've prepared a policy recommendation for you. 
+      
+Coverage: $${policyData.coverageAmount?.toLocaleString()}
+Premium: $${policyData.premiumAmount}/year
+Term: ${policyData.termLength || 1} year(s)
+
+Would you like to proceed with this policy?POLICY_RECOMMENDATION${JSON.stringify(policyData)}`,
+      timestamp: new Date(),
+    };
+    
+    setMessages([...messages, newMessage]);
+  };
+  
+  // Handle accepting a policy recommendation
+  const handleAcceptPolicy = async (policyData: any) => {
+    if (!account?.address) {
+      toast.error("Please connect your wallet first");
+      return;
+    }
+    
+    setTransactionInProgress(true);
+    try {
+      // Add a message indicating acceptance
+      const acceptMessage: Message = {
+        id: Date.now().toString(),
+        sender: "user",
+        text: "I'd like to accept this policy recommendation.",
+        timestamp: new Date(),
+      };
+      setMessages([...messages, acceptMessage]);
+      
+      console.log("Creating policy with data:", policyData);
+      
+      // Create the policy using the blockchain service
+      const result = await createPolicy({
+        walletAddress: account.address.toString(),
+        coverageAmount: policyData.coverageAmount,
+        premiumAmount: policyData.premiumAmount,
+        durationDays: (policyData.termLength || 1) * 365
+      });
+      
+      // Parse the transaction payload
+      let payload;
+      try {
+        payload = JSON.parse(result.hash);
+        console.log("Policy creation payload:", payload);
+      } catch (parseError) {
+        console.error("Failed to parse transaction payload:", parseError);
+        throw new Error("Invalid transaction payload format");
+      }
+      
+      // Submit the transaction through the wallet
+      const response = await signAndSubmitTransaction({
+        sender: account.address,
+        data: {
+          function: payload.function,
+          functionArguments: payload.arguments,
+          typeArguments: payload.type_arguments || []
+        }
+      });
+      
+      console.log("Transaction response:", response);
+      
+      // Add a waiting message while we fetch the real policy ID
+      const waitingMessage: Message = {
+        id: Date.now().toString(),
+        sender: "agent",
+        text: `Great! Your policy has been created successfully. The transaction hash is: ${response.hash}
+
+Fetching your policy details...`,
+        timestamp: new Date(),
+      };
+      
+      setMessages([...messages, acceptMessage, waitingMessage]);
+      toast.success("Policy created! Fetching details...");
+      
+      // Wait a moment for the blockchain to process the transaction
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Fetch the actual policies from the blockchain to get the real policy_id
+      console.log("Fetching policies to find the new one...");
+      const userPolicies = await getUserPolicies(account.address.toString());
+      console.log("Fetched policies after creation:", userPolicies);
+      
+      if (userPolicies.length === 0) {
+        throw new Error("No policies found after creation");
+      }
+      
+      // Sort by creation time to get the most recently created policy
+      const sortedPolicies = [...userPolicies].sort((a, b) => 
+        parseInt(b.created_at.toString()) - parseInt(a.created_at.toString())
+      );
+      
+      const newPolicy = sortedPolicies[0]; // The most recent policy
+      console.log("Using most recent policy:", newPolicy);
+      
+      if (!newPolicy || !newPolicy.policy_id) {
+        throw new Error("Could not find a valid policy ID");
+      }
+      
+      // Use the actual policy ID from the blockchain
+      console.log("Found real policy ID from blockchain:", newPolicy.policy_id);
+      
+      // Update the list of policies
+      setPolicies(sortedPolicies);
+      
+      // Now create the success message with the real policy ID
+      const successMessage: Message = {
+        id: Date.now().toString(),
+        sender: "agent",
+        text: `I've added your new policy to your account. 
+
+Policy details:
+- Policy ID: ${newPolicy.policy_id}
+- Coverage: $${newPolicy.coverage_amount.toLocaleString()}
+- Premium: $${newPolicy.premium_amount.toLocaleString()}/year
+- Term: ${newPolicy.term_length} days
+
+Would you like to pay the premium now to activate your policy?PAY_PREMIUM_PROMPT:${newPolicy.policy_id}`,
+        timestamp: new Date(),
+      };
+      
+      // Replace the waiting message with the success message
+      const updatedMessages = [...messages, acceptMessage, successMessage];
+      setMessages(updatedMessages);
+      
+    } catch (error) {
+      console.error("Error in policy acceptance/creation:", error);
+      
+      // Add an error message
+      const errorMessage: Message = {
+        id: Date.now().toString(),
+        sender: "agent",
+        text: `I'm sorry, there was an error processing your policy: ${error instanceof Error ? error.message : 'Unknown error'}.
+
+Please try again later or contact support.`,
+        timestamp: new Date(),
+      };
+      
+      setMessages([...messages, errorMessage]);
+      toast.error(`Policy operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setTransactionInProgress(false);
+      setRecommendedPolicy(null);
+    }
+  };
+  
+  // Handle rejecting a policy recommendation
+  const handleRejectPolicy = () => {
+    // Add a rejection message
+    const rejectMessage: Message = {
+      id: Date.now().toString(),
+      sender: "user",
+      text: "I'd like to see other options.",
+      timestamp: new Date(),
+    };
+    
+    const responseMessage: Message = {
+      id: Date.now().toString() + "1",
+      sender: "agent",
+      text: "No problem. Let me know what changes you'd like to make to the policy, and I can prepare a new recommendation.",
+      timestamp: new Date(),
+    };
+    
+    setMessages([...messages, rejectMessage, responseMessage]);
+    setRecommendedPolicy(null);
+  };
+  
+  // Handle paying a premium for a policy
+  const handlePayPremium = async (policyId: string) => {
+    if (!account?.address) {
+      toast.error("Please connect your wallet first");
+      return;
+    }
+    
+    setTransactionInProgress(true);
+    try {
+      // Convert policy ID to a number
+      let numericPolicyId: number;
+      
+      try {
+        // Extract just the numeric part if it contains non-numeric characters
+        const match = policyId.match(/\d+/);
+        if (match) {
+          numericPolicyId = parseInt(match[0], 10);
+        } else {
+          numericPolicyId = parseInt(policyId, 10);
+        }
+        
+        if (isNaN(numericPolicyId)) {
+          throw new Error(`Invalid policy ID format: ${policyId}`);
+        }
+      } catch (error) {
+        console.error("Error parsing policy ID:", error);
+        toast.error("Invalid policy ID format");
+        return;
+      }
+      
+      console.log("Using numeric policy ID for premium payment:", numericPolicyId);
+      
+      // Find the matching policy in our list if possible
+      const matchingPolicy = policies.find(p => 
+        p.policy_id === numericPolicyId.toString() || 
+        parseInt(p.policy_id.toString()) === numericPolicyId
+      );
+      
+      // Get premium amount from matching policy or use default
+      const premiumAmount = matchingPolicy?.premium_amount || 500;
+      console.log("Using premium amount:", premiumAmount, "for policy:", matchingPolicy || "not found");
+      
+      // Add a message indicating payment intention
+      const payMessage: Message = {
+        id: Date.now().toString(),
+        sender: "user",
+        text: `I'd like to pay the premium for policy #${numericPolicyId}.`,
+        timestamp: new Date(),
+      };
+      setMessages([...messages, payMessage]);
+      
+      console.log("Paying premium for policy ID:", numericPolicyId, "with amount:", premiumAmount);
+      
+      // Create the payment transaction
+      const result = await payPremium({
+        policyId: numericPolicyId,
+        amount: premiumAmount
+      });
+      
+      // Parse the transaction payload
+      let payload;
+      try {
+        payload = JSON.parse(result.hash);
+        console.log("Premium payment payload:", payload);
+      } catch (parseError) {
+        console.error("Failed to parse transaction payload:", parseError);
+        throw new Error("Invalid transaction payload format");
+      }
+      
+      // Submit the transaction through the wallet
+      const response = await signAndSubmitTransaction({
+        sender: account.address,
+        data: {
+          function: payload.function,
+          functionArguments: payload.arguments,
+          typeArguments: payload.type_arguments || []
+        }
+      });
+      
+      console.log("Premium payment transaction response:", response);
+      
+      // Add a success message
+      const successMessage: Message = {
+        id: Date.now().toString(),
+        sender: "agent",
+        text: `Great! Your premium payment for policy #${numericPolicyId} was successful.
+
+Transaction hash: ${response.hash}
+
+Your policy is now active and your coverage is in effect.`,
+        timestamp: new Date(),
+      };
+      
+      setMessages([...messages, payMessage, successMessage]);
+      toast.success("Premium payment successful!");
+      
+      // Wait a moment for the blockchain to process the transaction
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Refresh policies to update status
+      console.log("Refreshing policies after premium payment");
+      const updatedPolicies = await getUserPolicies(account.address.toString());
+      setPolicies(updatedPolicies);
+      
+    } catch (error) {
+      console.error("Error paying premium:", error);
+      
+      // Add an error message
+      const errorMessage: Message = {
+        id: Date.now().toString() + "1",
+        sender: "agent",
+        text: `I'm sorry, there was an error processing your premium payment. Please try again.`,
+        timestamp: new Date(),
+      };
+      
+      setMessages([...messages, errorMessage]);
+      toast.error(`Failed to pay premium: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setTransactionInProgress(false);
+    }
+  };
+  
+  // Handle filing a claim
+  const handleFileClaim = async (policyId: string) => {
+    if (!account?.address) {
+      toast.error("Please connect your wallet first");
+      return;
+    }
+    
+    // Show a prompt for entering claim details
+    const claimMessage: Message = {
+      id: Date.now().toString(),
+      sender: "agent",
+      text: `Please tell me more about your claim for policy #${policyId}. What happened and what amount are you claiming?`,
+      timestamp: new Date(),
+    };
+    
+    setMessages([...messages, claimMessage]);
+    
+    // Store the policy ID for when the user responds
+    setInputValue(`I'd like to file a claim for policy #${policyId} for $`);
+    
+    // Note: The actual claim submission will happen when the user responds with details
+    // That would need to be handled in the sendMessage function
+  };
+
   if (loading && !dashboardReady) {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-gradient-to-b from-[#0d1117] to-[#161b22] text-cora-light pt-16">
@@ -583,6 +1133,7 @@ export function Dashboard() {
 
   return (
     <div className={`flex flex-col md:flex-row w-full h-screen bg-gradient-to-b from-[#0d1117] to-[#161b22] text-cora-light transition-opacity duration-500 pt-16 ${dashboardReady ? 'opacity-100' : 'opacity-0'}`}>
+      <Toaster position="top-right" />
       <div className="md:w-64 lg:w-72 p-2 hidden md:block overflow-hidden">
         <Sidebar 
           activeTab={activeTab}
@@ -676,6 +1227,10 @@ export function Dashboard() {
                     setInputValue={setInputValue}
                     handleSendMessage={sendMessage}
                     handleKeyPress={handleKeyPress}
+                    handleAcceptPolicy={handleAcceptPolicy}
+                    handleRejectPolicy={handleRejectPolicy}
+                    handlePayPremium={handlePayPremium}
+                    handleFileClaim={handleFileClaim}
                   />
                 </div>
               </div>

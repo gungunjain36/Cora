@@ -26,16 +26,15 @@ export type Message = {
   sender: "user" | "agent";
   text: string;
   timestamp: Date;
-  attachments?: string[];
-  isRead?: boolean;
+  isPolicyRecommendation?: boolean;
+  policyId?: string;
 };
 
 export type ChatSession = {
   id: string;
   title: string;
-  lastMessage?: string;
-  lastTimestamp?: Date;
-  isActive?: boolean;
+  lastModified: Date;
+  messages: Message[];
 };
 
 // CSS animation keyframes - to be added to global styles
