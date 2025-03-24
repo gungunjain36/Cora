@@ -5,6 +5,8 @@ import { blockchainService } from '../../utils/blockchainService';
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { Loader2 } from 'lucide-react';
+import { toast } from "react-hot-toast";
+import { TransactionButton } from '../ui/TransactionButton';
 
 type PoliciesTabProps = {
   userId: string;
@@ -17,7 +19,7 @@ type NewPolicyFormData = {
 };
 
 export function PoliciesTab({ userId }: PoliciesTabProps) {
-  const { account, connect, wallets } = useWallet();
+  const { account, connect, wallets, signAndSubmitTransaction } = useWallet();
   const [policies, setPolicies] = useState<PolicyCard[]>([]);
   const [loading, setLoading] = useState(false);
   const [showNewPolicyModal, setShowNewPolicyModal] = useState(false);
@@ -31,7 +33,7 @@ export function PoliciesTab({ userId }: PoliciesTabProps) {
   const [success, setSuccess] = useState<string | null>(null);
   const [activeCard, setActiveCard] = useState<string | null>(null);
   const [showPaymentPrompt, setShowPaymentPrompt] = useState(false);
-  const [processingPayment, setProcessingPayment] = useState(false);
+  const [processingPayment, setProcessingPayment] = useState<string | null>(null);
   const [transactionHash, setTransactionHash] = useState('');
   const [transactionStatus, setTransactionStatus] = useState('');
   const [policyActivated, setPolicyActivated] = useState(false);
@@ -44,6 +46,10 @@ export function PoliciesTab({ userId }: PoliciesTabProps) {
   } | null>(null);
   const [viewingTransaction, setViewingTransaction] = useState<string | null>(null);
   const [activePayingPolicy, setActivePayingPolicy] = useState<string | null>(null);
+  const [processingClaim, setProcessingClaim] = useState<string | null>(null);
+  const [claimReason, setClaimReason] = useState("");
+  const [claimAmount, setClaimAmount] = useState("");
+  const [showClaimForm, setShowClaimForm] = useState<string | null>(null);
 
   // Fetch policies from blockchain when wallet address changes
   useEffect(() => {
@@ -106,9 +112,9 @@ export function PoliciesTab({ userId }: PoliciesTabProps) {
             id: policy.policy_id,
             name: policy.policy_type || 'Life Insurance Policy',
             coverage: `$${(policy.coverage_amount || 0).toLocaleString()}`,
-            premium: `$${(policy.premium || 0).toLocaleString()} / year`,
+            premium: `$${(policy.premium || policy.premium_amount || 0).toLocaleString()} / year`,
             status: policy.status || 'Active',
-            premiumAmount: policy.premium || 0,
+            premiumAmount: policy.premium || policy.premium_amount || 0,
             txHash: policy.transaction_hash,
             policyCreationDate: policy.start_date,
             paymentDue: paymentDue,
@@ -235,21 +241,21 @@ export function PoliciesTab({ userId }: PoliciesTabProps) {
       setTransactionStatus('Creating policy on blockchain...');
       const result = await blockchainService.createPolicy(walletAddress, policyData);
       
+      console.log("Policy creation result:", result);
+      
       if (result.success) {
-        // Store policy ID for payment
-        const policyId = result.data?.policy_id;
+        // Successfully created policy
+        const policyId = result.data?.policy_id || result.data?.policy?.policy_id;
+        const txHash = result.data?.txHash || result.data?.policy?.transaction_hash;
         
         if (!policyId) {
           setError('Policy created but no policy ID returned. Please check My Policies to confirm.');
-          setTimeout(() => {
-            setShowNewPolicyModal(false);
-            fetchPolicies(walletAddress);
-          }, 2000);
+          setTimeout(() => fetchPolicies(walletAddress), 2000);
           setProcessing(false);
           return;
         }
-        
-        // Set the newly created policy
+
+        // Store policy details for payment prompt
         setCreatedPolicy({
           policyId: policyId,
           premium: annualPremium,
@@ -258,18 +264,25 @@ export function PoliciesTab({ userId }: PoliciesTabProps) {
           termLength: newPolicy.term_length
         });
 
-        // Show payment prompt
+        // Update status
+        setTransactionStatus('');
+        setTransactionHash(txHash || '');
+        setSuccess('Policy created successfully! You can now pay the premium to activate it.');
         setShowPaymentPrompt(true);
-        setSuccess('Policy created successfully! Please pay the first premium to activate.');
+        
+        // Refresh policy list
+        setTimeout(() => fetchPolicies(walletAddress), 2000);
       } else {
+        // Policy creation failed
+        setTransactionStatus('');
         setError(result.message || 'Failed to create policy. Please try again.');
       }
     } catch (error) {
       console.error('Error creating policy:', error);
       setError('An unexpected error occurred. Please try again later.');
+      setTransactionStatus('');
     } finally {
       setProcessing(false);
-      setTransactionStatus('');
     }
   };
 
@@ -286,7 +299,7 @@ export function PoliciesTab({ userId }: PoliciesTabProps) {
       
       const walletAddress = account.address.toString();
       
-      setProcessingPayment(true);
+      setProcessingPayment(policyId);
       setTransactionStatus(`Preparing payment transaction for policy ${policyId}...`);
       setError(null);
       
@@ -295,7 +308,7 @@ export function PoliciesTab({ userId }: PoliciesTabProps) {
       const policyDetails = await blockchainService.getPolicyDetails(policyId);
       if (!policyDetails.success) {
         setError(`Could not verify policy details: ${policyDetails.message}`);
-        setProcessingPayment(false);
+        setProcessingPayment(null);
         return;
       }
       
@@ -346,52 +359,77 @@ export function PoliciesTab({ userId }: PoliciesTabProps) {
       console.error('Error processing payment:', error);
       setError('An unexpected error occurred during payment.');
     } finally {
-      setProcessingPayment(false);
+      setProcessingPayment(null);
     }
   };
 
   const handlePayPremium = async (policyId: string, amount: number) => {
+    if (!account?.address) {
+      toast.error("Please connect your wallet to pay premium");
+      return { success: false, message: "Wallet not connected" };
+    }
+    
     try {
-      // Check if wallet is connected
-      if (!account || !account.address) {
-        setError('Please connect your wallet to make a payment.');
-        if (wallets.length > 0) {
-          await connect(wallets[0].name);
-        }
-        return;
-      }
-      
-      const walletAddress = account.address.toString();
-      
-      setProcessingPayment(true);
-      setTransactionStatus(`Processing payment for policy ${policyId}...`);
-      
-      const paymentResult = await blockchainService.processPayment(
-        walletAddress,
+      const result = await blockchainService.processPayment(
+        account.address.toString(),
         policyId,
         amount
       );
       
-      if (paymentResult.success) {
-        setSuccess('Payment successful! Your policy has been activated.');
-        setTransactionHash(paymentResult.data?.txHash || '');
-        setPolicyActivated(true);
+      if (result.success) {
+        console.log("Payment transaction:", result.data?.transaction_hash);
         
-        // Update policy list after payment
-        setTimeout(() => {
-          fetchPolicies(walletAddress);
-          setShowPaymentPrompt(false);
-          setShowNewPolicyModal(false);
-        }, 2000);
+        // Refresh policies after successful payment
+        await fetchPolicies(account.address.toString());
+        return { success: true };
       } else {
-        setError(`Payment failed: ${paymentResult.message}`);
+        return { success: false, message: result.message || "Failed to process payment" };
       }
     } catch (error) {
-      console.error('Error processing payment:', error);
-      setError('An unexpected error occurred during payment.');
+      console.error("Error paying premium:", error);
+      return { success: false, message: "An error occurred while processing payment" };
+    }
+  };
+
+  const handleFileClaim = async (policyId: string) => {
+    if (!account?.address) {
+      toast.error("Please connect your wallet to file a claim");
+      return;
+    }
+    
+    if (!claimReason || !claimAmount) {
+      toast.error("Please provide claim reason and amount");
+      return;
+    }
+    
+    try {
+      setProcessingClaim(policyId);
+      
+      const result = await blockchainService.submitClaim(
+        account.address.toString(),
+        policyId,
+        {
+          amount: parseFloat(claimAmount),
+          reason: claimReason,
+          details: `Claim filed on ${new Date().toLocaleString()}`,
+          submitted_date: new Date().toISOString()
+        }
+      );
+      
+      if (result.success) {
+        toast.success("Claim submitted successfully!");
+        console.log("Claim transaction:", result.data?.txHash);
+        setShowClaimForm(null);
+        setClaimReason("");
+        setClaimAmount("");
+      } else {
+        toast.error(result.message || "Failed to submit claim");
+      }
+    } catch (error) {
+      console.error("Error filing claim:", error);
+      toast.error("Failed to submit claim");
     } finally {
-      setProcessingPayment(false);
-      setTransactionStatus('');
+      setProcessingClaim(null);
     }
   };
 
@@ -485,48 +523,15 @@ export function PoliciesTab({ userId }: PoliciesTabProps) {
                         <span className="font-bold">${policy.nextPaymentAmount?.toLocaleString()}</span>
                       </div>
                       
-                      {processingPayment && policy.id === activePayingPolicy ? (
-                        <div className="mt-2">
-                          <div className="flex items-center justify-center space-x-2 py-2 bg-black/30 rounded-lg">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            <span className="text-sm">{transactionStatus || 'Processing payment...'}</span>
-                          </div>
-                          
-                          {transactionHash && (
-                            <div className="mt-2 pt-2 border-t border-yellow-500/20 text-xs">
-                              <p className="break-all">
-                                <span className="font-semibold">Transaction:</span> {transactionHash}
-                              </p>
-                              <a 
-                                href={`https://explorer.aptoslabs.com/txn/${transactionHash}?network=testnet`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-green-400 underline mt-1 inline-block"
-                              >
-                                View on Aptos Explorer
-                              </a>
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <button 
-                          onClick={() => {
-                            setActivePayingPolicy(policy.id);
-                            handleExistingPolicyPayment(policy.id, policy.nextPaymentAmount || 0);
-                          }}
-                          disabled={processingPayment}
-                          className="w-full mt-2 py-2 bg-gradient-to-r from-yellow-500 to-orange-500 text-white rounded-lg hover:opacity-90 transition-all text-sm font-medium flex items-center justify-center"
-                        >
-                          {processingPayment ? (
-                            <>
-                              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                              Processing...
-                            </>
-                          ) : (
-                            <>Pay Premium Now</>
-                          )}
-                        </button>
-                      )}
+                      <TransactionButton
+                        onClick={() => handlePayPremium(policy.id, policy.nextPaymentAmount || 0)}
+                        loadingText="Processing payment..."
+                        successText="Premium payment successful!"
+                        errorText="Payment failed"
+                        className="w-full mt-2 py-2 bg-gradient-to-r from-yellow-500 to-orange-500 text-white rounded-lg hover:opacity-90 transition-all text-sm font-medium flex items-center justify-center"
+                      >
+                        Pay Premium Now
+                      </TransactionButton>
                     </div>
                   )}
                   
@@ -796,25 +801,18 @@ export function PoliciesTab({ userId }: PoliciesTabProps) {
           )}
           
           {!policyActivated && (
-            <button
+            <TransactionButton
               onClick={() => handlePayPremium(createdPolicy.policyId, createdPolicy.premium)}
-              disabled={processingPayment}
+              loadingText="Processing Payment..."
+              successText="Payment successful! Your policy is now active."
+              errorText="Payment failed. Please try again."
               className="w-full mt-4 py-3 bg-gradient-to-r from-cora-primary to-purple-600 text-white rounded-lg hover:shadow-lg transition-all duration-200 flex items-center justify-center"
             >
-              {processingPayment ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Processing Payment...
-                </>
-              ) : (
-                <>
-                  Pay Premium Now
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 ml-2" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M12.293 5.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-2.293-2.293a1 1 0 010-1.414z" clipRule="evenodd" />
-                  </svg>
-                </>
-              )}
-            </button>
+              Pay Premium Now
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 ml-2" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M12.293 5.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-2.293-2.293a1 1 0 010-1.414z" clipRule="evenodd" />
+              </svg>
+            </TransactionButton>
           )}
         </div>
       )}
@@ -858,6 +856,57 @@ export function PoliciesTab({ userId }: PoliciesTabProps) {
           </div>
         </DialogContent>
       </Dialog>
+
+      {showClaimForm && (
+        <div className="mt-4 p-4 rounded-lg bg-gradient-to-r from-cora-primary/10 to-purple-600/10 border border-cora-primary/30">
+          <h3 className="text-lg font-semibold text-white mb-2">File a Claim</h3>
+          
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Claim Reason</label>
+              <input
+                type="text"
+                value={claimReason}
+                onChange={(e) => setClaimReason(e.target.value)}
+                placeholder="Reason for claim"
+                className="w-full px-4 py-2 bg-black/40 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-cora-primary"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Claim Amount</label>
+              <input
+                type="number"
+                value={claimAmount}
+                onChange={(e) => setClaimAmount(e.target.value)}
+                placeholder="Amount"
+                className="w-full px-4 py-2 bg-black/40 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-cora-primary"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => handleFileClaim(showClaimForm)}
+                disabled={processingClaim === showClaimForm}
+                className="flex-1 px-4 py-2 bg-gradient-to-r from-cora-primary to-cora-secondary text-white rounded-lg hover:opacity-90 transition-all shadow-lg shadow-cora-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {processingClaim === showClaimForm ? (
+                  <div className="flex items-center justify-center">
+                    <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-white mr-2"></div>
+                    Submitting...
+                  </div>
+                ) : (
+                  "Submit Claim"
+                )}
+              </button>
+              <button
+                onClick={() => setShowClaimForm(null)}
+                className="px-4 py-2 bg-black/40 border border-white/20 text-white rounded-lg hover:opacity-90 transition-all"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 } 

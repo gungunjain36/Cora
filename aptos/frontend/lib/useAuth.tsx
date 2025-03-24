@@ -1,6 +1,7 @@
-import { usePrivy } from '@privy-io/react-auth';
-import { useCallback, useEffect, useState } from 'react';
+import { useContext, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useWallet } from '@aptos-labs/wallet-adapter-react';
+import { AptosAuthContext } from './AptosAuthProvider';
 import { getUserData } from '../utils/api';
 
 interface User {
@@ -12,87 +13,85 @@ interface User {
 }
 
 export function useAuth() {
-  const { 
-    ready,
-    authenticated, 
-    user, 
-    login, 
-    logout, 
-    connectWallet 
-  } = usePrivy();
+  const { authenticated, walletAddress, userId } = useContext(AptosAuthContext);
+  const { account, connect, disconnect, wallets, connected } = useWallet();
   
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
-  // Update user data when Privy user changes
+  // Update user data when wallet connection changes
   useEffect(() => {
-    const fetchUserDetails = async (userId: string) => {
+    const fetchUserDetails = async (id: string) => {
       try {
         // Try to get user data from backend
-        const userData = await getUserData(userId);
+        const userData = await getUserData(id);
         
         // If user data exists, they've completed onboarding
         return {
-          uuid: userId,
-          walletAddress: user?.wallet?.address,
-          name: userData.name || user?.wallet?.address || undefined,
-          email: userData.email || user?.email?.address || undefined,
+          uuid: id,
+          walletAddress: walletAddress,
+          name: userData.name || walletAddress || undefined,
+          email: userData.email || undefined,
           hasCompletedOnboarding: true // User exists in backend, so they've completed onboarding
         };
       } catch (error) {
         // User data not found, they haven't completed onboarding
         return {
-          uuid: userId, 
-          walletAddress: user?.wallet?.address,
-          name: user?.wallet?.address || undefined,
-          email: user?.email?.address || undefined,
+          uuid: id, 
+          walletAddress: walletAddress,
+          name: walletAddress?.slice(0, 6) + '...' + walletAddress?.slice(-4) || undefined,
+          email: undefined,
           hasCompletedOnboarding: false
         };
       }
     };
     
-    if (ready) {
-      if (authenticated && user) {
-        // Extract user ID from Privy but don't trim it - keep the full ID
-        // This ensures compatibility with the session IDs from the backend
-        const userId = user.id.replace('did:privy:', '');
-        
-        // Fetch user details from backend
-        setLoading(true);
-        fetchUserDetails(userId)
-          .then(userData => {
-            setCurrentUser(userData);
-            setLoading(false);
-          })
-          .catch(err => {
-            console.error("Error fetching user details:", err);
-            setCurrentUser({
-              uuid: userId,
-              walletAddress: user?.wallet?.address,
-              name: user?.wallet?.address || undefined,
-              email: user?.email?.address || undefined,
-              hasCompletedOnboarding: false
-            });
-            setLoading(false);
+    if (authenticated && userId) {
+      // Fetch user details from backend
+      setLoading(true);
+      fetchUserDetails(userId)
+        .then(userData => {
+          setCurrentUser(userData);
+          setLoading(false);
+        })
+        .catch(err => {
+          console.error("Error fetching user details:", err);
+          setCurrentUser({
+            uuid: userId,
+            walletAddress: walletAddress || undefined,
+            name: walletAddress?.slice(0, 6) + '...' + walletAddress?.slice(-4) || undefined,
+            hasCompletedOnboarding: false
           });
-      } else {
-        setCurrentUser(null);
-        setLoading(false);
+          setLoading(false);
+        });
+    } else {
+      setCurrentUser(null);
+      setLoading(false);
+    }
+  }, [authenticated, userId, walletAddress]);
+
+  // Handle login by connecting wallet
+  const handleLogin = useCallback(async () => {
+    if (wallets.length > 0) {
+      try {
+        await connect(wallets[0].name);
+        return true;
+      } catch (error) {
+        console.error("Error connecting wallet:", error);
+        return false;
       }
     }
-  }, [ready, authenticated, user]);
-
-  // Handle login and redirect
-  const handleLogin = useCallback(async () => {
-    await login();
-  }, [login]);
+    return false;
+  }, [connect, wallets]);
 
   // Handle logout
   const handleLogout = useCallback(async () => {
-    await logout();
+    if (connected) {
+      await disconnect();
+    }
     navigate('/');
-  }, [logout, navigate]);
+  }, [disconnect, navigate, connected]);
 
   // Navigate based on auth state
   const navigateByAuthState = useCallback(() => {
@@ -114,7 +113,7 @@ export function useAuth() {
     authenticated,
     user: currentUser,
     loading,
-    connectWallet,
+    connectWallet: handleLogin,
     isOnboarded: currentUser?.hasCompletedOnboarding || false
   };
 } 

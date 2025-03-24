@@ -13,7 +13,7 @@ export function ConnectWalletButton({
   variant = "primary",
   fullWidth = false 
 }: ConnectWalletButtonProps) {
-  const { authenticated, login, user, connectWallet } = useAuth();
+  const { authenticated, login, user } = useAuth();
   const { account, connect, connected, wallets } = useWallet();
   const [isLoading, setIsLoading] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
@@ -35,62 +35,37 @@ export function ConnectWalletButton({
     }
   }, [showTooltip]);
   
-  // Function to connect Aptos wallet
-  const connectAptosWallet = async () => {
-    try {
-      // Check if we have any Aptos wallets available
-      if (wallets.length > 0) {
-        // Try to connect with the first available wallet
-        await connect(wallets[0].name);
-        console.log("Connected to Aptos wallet:", wallets[0].name);
-        return true;
-      }
-      return false;
-    } catch (error) {
-      console.error("Error connecting to Aptos wallet:", error);
-      return false;
-    }
-  };
-  
   const handleConnect = async () => {
     try {
       setIsLoading(true);
       
       if (!authenticated) {
-        // If not authenticated, trigger login flow
-        await login();
-      } else if (!user?.walletAddress && !connected) {
-        // Try to connect Privy wallet first
-        try {
-          await connectWallet();
-        } catch (privyError) {
-          console.error("Error connecting Privy wallet, trying Aptos wallet:", privyError);
-          // If Privy wallet connection fails, try Aptos wallet
-          await connectAptosWallet();
+        // If not authenticated, try to connect wallet
+        if (wallets.length > 0) {
+          await connect(wallets[0].name);
+          console.log("Connected to Aptos wallet:", wallets[0].name);
+        } else {
+          console.error("No Aptos wallets available");
         }
-      } else if (!connected) {
-        // If Privy is connected but not Aptos, connect Aptos
-        await connectAptosWallet();
       } else {
         // If already connected, show address tooltip
         setShowTooltip(true);
       }
     } catch (error) {
-      console.error("Error connecting wallet:", error);
+      console.error("Error connecting Aptos wallet:", error);
     } finally {
       setIsLoading(false);
     }
   };
   
-  // Determine if any wallet is connected
-  const hasWallet = user?.walletAddress || connected;
+  // Determine if wallet is connected
+  const hasWallet = account?.address?.toString() || user?.walletAddress;
   
   // Determine button text based on auth state
   const buttonText = () => {
     if (isLoading) return "Connecting...";
     if (!authenticated) return "Connect Wallet";
     if (hasWallet) {
-      // Use Aptos wallet address if available, otherwise use Privy wallet
       const address = account?.address?.toString() || user?.walletAddress || '';
       return `${address.slice(0, 4)}...${address.slice(-4)}`;
     }
