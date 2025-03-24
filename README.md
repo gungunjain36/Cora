@@ -1,8 +1,16 @@
-# Cora Insurance System
+# Cora
 
 Cora is a comprehensive insurance platform that combines AI-powered insurance agents with blockchain-based policy management. This system offers users personalized insurance recommendations, automated policy creation, and secure claims processing through a modern, user-friendly interface.
 
+![image](https://github.com/user-attachments/assets/650b3758-b397-4bc0-8c41-e3f8beeb1388)
+
+![image](https://github.com/user-attachments/assets/37488229-25c6-428f-ba9e-c8a75c00ee48)
+
+
 ## System Architecture
+
+<img width="1024" alt="Screenshot 2025-03-24 at 17 37 32" src="https://github.com/user-attachments/assets/bf47047c-3542-4cda-8ee5-17db92ef3348" />
+
 
 The Cora Insurance System consists of several key components:
 
@@ -113,67 +121,9 @@ uvicorn main:app --reload
 ### Running the Frontend
 
 ```bash
-cd aptos/frontend
+cd aptos
 npm run dev
 ```
 
-## Blockchain CLI Usage
 
-The CLI tool provides a convenient way to interact with the blockchain:
 
-```bash
-# Check balance of an address
-node aptos/scripts/cli.ts balance <address>
-
-# Fund an account with test tokens (devnet only)
-node aptos/scripts/cli.ts fund <address> --amount 100000000
-
-# Register a new user
-node aptos/scripts/cli.ts register-user --name "John Doe" --email "john@example.com" --wallet <wallet_address>
-
-# Create a policy
-node aptos/scripts/cli.ts create-policy --user-id <user_id> --policy-type "Term Life" --coverage 5000000 --premium 12500
-
-# Get policies for a user
-node aptos/scripts/cli.ts get-policies <wallet_address>
-
-# Submit a claim
-node aptos/scripts/cli.ts submit-claim --policy-id <policy_id> --amount 2500 --reason "Medical expenses"
-```
-
-## API Endpoints
-
-The backend system exposes the following blockchain-related endpoints:
-
-- `POST /wallet-mapping`: Map a user ID to a wallet address
-- `GET /verify-wallet/{user_id}/{wallet_address}`: Verify wallet mapping
-- `POST /register-user`: Register a new user
-- `POST /create-policy`: Create a new insurance policy
-- `GET /user-policies/{wallet_address}`: Get policies for a user
-- `GET /policy-details/{policy_id}`: Get details of a specific policy
-- `POST /process-payment`: Process a premium payment
-- `POST /submit-claim`: Submit an insurance claim
-- `GET /claim-status/{claim_id}`: Get the status of a claim
-
-## Architecture Diagram
-
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│                 │     │                 │     │                 │
-│  Frontend UI    │◄────►  Backend API    │◄────►  Aptos          │
-│  (React)        │     │  (FastAPI)      │     │  Blockchain     │
-│                 │     │                 │     │                 │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-                              ▲
-                              │
-                              ▼
-                       ┌─────────────────┐
-                       │                 │
-                       │  AI Agents      │
-                       │                 │
-                       └─────────────────┘
-```
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
