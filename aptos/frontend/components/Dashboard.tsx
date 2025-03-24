@@ -30,7 +30,7 @@ import {
 import { Toaster, toast } from 'react-hot-toast';
 
 // Feature flags - control behavior
-const USE_MOCK_POLICY_RECOMMENDATIONS = true; // Set to false to use real backend recommendations
+const USE_MOCK_POLICY_RECOMMENDATIONS = true;
 
 export function Dashboard() {
   const { user, authenticated, loading: authLoading } = useAuth();
@@ -423,7 +423,6 @@ We'll review your claim and get back to you within 2-3 business days.`,
         
         if (USE_MOCK_POLICY_RECOMMENDATIONS) {
           // Use mock policy recommendations
-          console.log("Using mock policy recommendations instead of backend API");
           
           // Create mock policy recommendations
           const mockPolicies = [
